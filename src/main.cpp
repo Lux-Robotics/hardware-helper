@@ -2,14 +2,7 @@
 
 #include <iostream>
 
-#ifdef _WIN32
-#include <windows.h>
-
-int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
-#else
-int main()
-#endif
-{
+int main() {
     try {
         webview::webview w(false, nullptr);
 
