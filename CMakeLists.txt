@@ -29,6 +29,7 @@ target_link_libraries(hardware-helper PRIVATE
 
 option(RKDEV_ENABLE "Build rkdeveloptool with ExternalProject" ON)
 option(RKDEV_DEBUG "Enable rkdeveloptool build diagnostics" OFF)
+option(RKDEV_PATCH_WERROR "Remove -Werror from rkdeveloptool Makefile on MSYS2" ON)
 set(RKDEV_REPO "https://github.com/lux-robotics/rkdeveloptool.git" CACHE STRING "rkdeveloptool repository URL")
 set(RKDEV_TAG "master" CACHE STRING "rkdeveloptool git tag or branch")
 
@@ -42,18 +43,8 @@ endif()
 
 set(RKDEV_PREFIX ${CMAKE_BINARY_DIR}/rkdeveloptool/install)
 set(RKDEV_SOURCE_DIR ${CMAKE_BINARY_DIR}/rkdeveloptool/src)
-set(RKDEV_BUILT_BIN ${RKDEV_SOURCE_DIR}/${RKDEV_BINARY_NAME})
-if(WIN32)
-    set(RKDEV_OUTPUT_BIN ${RKDEV_BUILT_BIN})
-else()
-    set(RKDEV_OUTPUT_BIN ${RKDEV_PREFIX}/bin/${RKDEV_BINARY_NAME})
-endif()
-set(RKDEV_COPY_SCRIPT ${CMAKE_SOURCE_DIR}/cmake/copy_rkdev.cmake)
-set(RKDEV_SEARCH_ROOT ${CMAKE_BINARY_DIR}/rkdeveloptool)
-set(RKDEV_ALT_BINARY_NAME "")
-if(WIN32 AND RKDEV_BINARY_NAME MATCHES "\\.exe$")
-    string(REGEX REPLACE "\\.exe$" "" RKDEV_ALT_BINARY_NAME "${RKDEV_BINARY_NAME}")
-endif()
+set(RKDEV_OUTPUT_BIN ${RKDEV_PREFIX}/bin/${RKDEV_BINARY_NAME})
+set(RKDEV_MSYS_BUILD_SCRIPT ${CMAKE_SOURCE_DIR}/cmake/build_rkdev_msys.sh)
 
 if(RKDEV_ENABLE)
     include(ExternalProject)
@@ -69,13 +60,9 @@ if(RKDEV_ENABLE)
 
         string(TOLOWER "${RKDEV_MSYSTEM}" RKDEV_MSYSTEM_LOWER)
         set(RKDEV_PATH_PREFIX "/${RKDEV_MSYSTEM_LOWER}/bin:/usr/bin")
-        set(RKDEV_CONFIGURE_CMD ${RKDEV_BASH} -lc "export MSYSTEM=${RKDEV_MSYSTEM} && export PATH=${RKDEV_PATH_PREFIX}:$PATH && SRC_DIR=\$(cygpath -u '<SOURCE_DIR>') && PREFIX=\$(cygpath -u '${RKDEV_PREFIX}') && cd \"$SRC_DIR\" && ./autogen.sh && ./configure --prefix=\"$PREFIX\"")
-        if(RKDEV_DEBUG)
-            set(RKDEV_BUILD_CMD ${RKDEV_BASH} -lc "export MSYSTEM=${RKDEV_MSYSTEM} && export PATH=${RKDEV_PATH_PREFIX}:$PATH && set -x && SRC_DIR=\$(cygpath -u '<SOURCE_DIR>') && cd \"$SRC_DIR\" && make V=1 && echo 'rkdeveloptool find:' && find \"$SRC_DIR\" -type f -name 'rkdeveloptool*' -print | head -n 20 && echo 'exe find:' && find \"$SRC_DIR\" -type f -name '*.exe' -print | head -n 20")
-        else()
-            set(RKDEV_BUILD_CMD ${RKDEV_BASH} -lc "export MSYSTEM=${RKDEV_MSYSTEM} && export PATH=${RKDEV_PATH_PREFIX}:$PATH && SRC_DIR=\$(cygpath -u '<SOURCE_DIR>') && cd \"$SRC_DIR\" && make")
-        endif()
-        set(RKDEV_INSTALL_CMD ${CMAKE_COMMAND} -E echo "Skipping rkdeveloptool install on Windows")
+        set(RKDEV_CONFIGURE_CMD ${RKDEV_BASH} -lc "export MSYSTEM=${RKDEV_MSYSTEM} && export PATH=${RKDEV_PATH_PREFIX}:$PATH && SRC_DIR=\$(cygpath -u '<SOURCE_DIR>') && PREFIX=\$(cygpath -u '${RKDEV_PREFIX}') && cd \"$SRC_DIR\" && autoreconf -i && ./configure --prefix=\"$PREFIX\"")
+        set(RKDEV_BUILD_CMD ${RKDEV_BASH} -lc "export MSYSTEM=${RKDEV_MSYSTEM} && export PATH=${RKDEV_PATH_PREFIX}:$PATH && SRC_DIR=\$(cygpath -u '<SOURCE_DIR>') && PREFIX=\$(cygpath -u '${RKDEV_PREFIX}') && SCRIPT=\$(cygpath -u '${RKDEV_MSYS_BUILD_SCRIPT}') && bash \"$SCRIPT\" \"$SRC_DIR\" \"$PREFIX\" \"${RKDEV_BINARY_NAME}\" \"${RKDEV_PATCH_WERROR}\"")
+        set(RKDEV_INSTALL_CMD ${CMAKE_COMMAND} -E echo "rkdeveloptool install handled in build step")
     else()
         set(RKDEV_CONFIGURE_CMD /bin/sh -c "cd \"<SOURCE_DIR>\" && ./autogen.sh && ./configure --prefix=\"${RKDEV_PREFIX}\"")
         set(RKDEV_BUILD_CMD /bin/sh -c "cd \"<SOURCE_DIR>\" && make")
@@ -95,22 +82,9 @@ if(RKDEV_ENABLE)
 
     add_dependencies(hardware-helper rkdeveloptool_ext)
 
-    if(WIN32)
-        add_custom_command(TARGET hardware-helper POST_BUILD
-            COMMAND ${CMAKE_COMMAND}
-                    -DRKDEV_SEARCH_ROOT=${RKDEV_SEARCH_ROOT}
-                    -DRKDEV_BINARY_NAME=${RKDEV_BINARY_NAME}
-                    -DRKDEV_ALT_BINARY_NAME=${RKDEV_ALT_BINARY_NAME}
-                    -DRKDEV_BASH=${RKDEV_BASH}
-                    -DRKDEV_MSYSTEM=${RKDEV_MSYSTEM}
-                    -DRKDEV_DEST_DIR=$<TARGET_FILE_DIR:hardware-helper>
-                    -P ${RKDEV_COPY_SCRIPT}
-        )
-    else()
-        add_custom_command(TARGET hardware-helper POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    ${RKDEV_OUTPUT_BIN}
-                    $<TARGET_FILE_DIR:hardware-helper>
-        )
-    endif()
+    add_custom_command(TARGET hardware-helper POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${RKDEV_OUTPUT_BIN}
+                $<TARGET_FILE_DIR:hardware-helper>
+    )
 endif()
