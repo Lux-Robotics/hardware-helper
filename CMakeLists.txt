@@ -47,6 +47,7 @@ if(WIN32)
 else()
     set(RKDEV_OUTPUT_BIN ${RKDEV_PREFIX}/bin/${RKDEV_BINARY_NAME})
 endif()
+set(RKDEV_COPY_SCRIPT ${CMAKE_SOURCE_DIR}/cmake/copy_rkdev.cmake)
 
 if(RKDEV_ENABLE)
     include(ExternalProject)
@@ -81,14 +82,23 @@ if(RKDEV_ENABLE)
         CONFIGURE_COMMAND ${RKDEV_CONFIGURE_CMD}
         BUILD_COMMAND ${RKDEV_BUILD_CMD}
         INSTALL_COMMAND ${RKDEV_INSTALL_CMD}
-        BUILD_BYPRODUCTS ${RKDEV_OUTPUT_BIN}
     )
 
     add_dependencies(hardware-helper rkdeveloptool_ext)
 
-    add_custom_command(TARGET hardware-helper POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                ${RKDEV_OUTPUT_BIN}
-                $<TARGET_FILE_DIR:hardware-helper>
-    )
+    if(WIN32)
+        add_custom_command(TARGET hardware-helper POST_BUILD
+            COMMAND ${CMAKE_COMMAND}
+                    -DRKDEV_SEARCH_ROOT=${RKDEV_SOURCE_DIR}
+                    -DRKDEV_BINARY_NAME=${RKDEV_BINARY_NAME}
+                    -DRKDEV_DEST_DIR=$<TARGET_FILE_DIR:hardware-helper>
+                    -P ${RKDEV_COPY_SCRIPT}
+        )
+    else()
+        add_custom_command(TARGET hardware-helper POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    ${RKDEV_OUTPUT_BIN}
+                    $<TARGET_FILE_DIR:hardware-helper>
+        )
+    endif()
 endif()

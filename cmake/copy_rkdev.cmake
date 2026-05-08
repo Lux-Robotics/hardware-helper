@@ -1,0 +1,30 @@
+if(NOT DEFINED RKDEV_SEARCH_ROOT)
+  message(FATAL_ERROR "RKDEV_SEARCH_ROOT not set")
+endif()
+if(NOT DEFINED RKDEV_BINARY_NAME)
+  message(FATAL_ERROR "RKDEV_BINARY_NAME not set")
+endif()
+if(NOT DEFINED RKDEV_DEST_DIR)
+  message(FATAL_ERROR "RKDEV_DEST_DIR not set")
+endif()
+
+file(GLOB_RECURSE RKDEV_CANDIDATES LIST_DIRECTORIES false
+  "${RKDEV_SEARCH_ROOT}/${RKDEV_BINARY_NAME}"
+)
+list(LENGTH RKDEV_CANDIDATES RKDEV_COUNT)
+if(RKDEV_COUNT EQUAL 0)
+  message(FATAL_ERROR "rkdeveloptool binary '${RKDEV_BINARY_NAME}' not found under '${RKDEV_SEARCH_ROOT}'")
+endif()
+
+list(SORT RKDEV_CANDIDATES)
+list(GET RKDEV_CANDIDATES 0 RKDEV_SRC)
+message(STATUS "Using rkdeveloptool binary at ${RKDEV_SRC}")
+
+file(MAKE_DIRECTORY "${RKDEV_DEST_DIR}")
+execute_process(
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different "${RKDEV_SRC}" "${RKDEV_DEST_DIR}"
+  RESULT_VARIABLE RKDEV_COPY_RESULT
+)
+if(NOT RKDEV_COPY_RESULT EQUAL 0)
+  message(FATAL_ERROR "Failed to copy rkdeveloptool from '${RKDEV_SRC}' to '${RKDEV_DEST_DIR}'")
+endif()
