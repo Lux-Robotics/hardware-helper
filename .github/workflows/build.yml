@@ -20,14 +20,18 @@ jobs:
             name: windows-x64
             arch: x64
             msystem: MINGW64
+            msystem_lower: mingw64
             msys2_libusb: mingw-w64-x86_64-libusb
+            msys2_toolchain: mingw-w64-x86_64-toolchain
 
           # Windows ARM64
           - os: windows-latest
             name: windows-arm64
             arch: ARM64
             msystem: CLANGARM64
+            msystem_lower: clangarm64
             msys2_libusb: mingw-w64-clang-aarch64-libusb
+            msys2_toolchain: mingw-w64-clang-aarch64-toolchain
 
           # Linux x64
           - os: ubuntu-24.04
@@ -61,21 +65,23 @@ jobs:
           msystem: ${{ matrix.msystem }}
           install: >-
             base-devel
+            make
             autoconf
             automake
             libtool
             pkg-config
             ${{ matrix.msys2_libusb }}
+            ${{ matrix.msys2_toolchain }}
 
       - name: MSYS2 Sanity Check
         if: runner.os == 'Windows'
         run: |
-          C:/msys64/usr/bin/bash.exe -lc "echo MSYSTEM=$MSYSTEM; which autoreconf; autoreconf --version; pacman -Q autoconf automake libtool; echo PATH=$PATH"
+          C:/msys64/usr/bin/bash.exe -lc "export MSYSTEM=${{ matrix.msystem }}; export PATH=/${{ matrix.msystem_lower }}/bin:/usr/bin; echo MSYSTEM=$MSYSTEM; which autoreconf; autoreconf --version; which make; make --version; which gcc; gcc --version; which clang; clang --version; pacman -Q autoconf automake libtool; echo PATH=$PATH"
 
       - name: Ensure MSYS2 autotools
         if: runner.os == 'Windows'
         run: |
-          C:/msys64/usr/bin/bash.exe -lc "pacman -S --noconfirm --needed autoconf automake libtool"
+          C:/msys64/usr/bin/bash.exe -lc "export MSYSTEM=${{ matrix.msystem }}; export PATH=/${{ matrix.msystem_lower }}/bin:/usr/bin; pacman -S --noconfirm --needed make autoconf automake libtool ${{ matrix.msys2_toolchain }}"
 
       # Linux dependencies
       - name: Install Linux Dependencies
