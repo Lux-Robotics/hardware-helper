@@ -59,6 +59,33 @@ if(DEFINED RKDEV_BASH AND EXISTS "${RKDEV_BASH}")
       return()
     endif()
   endif()
+
+  execute_process(
+    COMMAND ${RKDEV_BASH} -lc "export MSYSTEM=${RKDEV_MSYSTEM}; export PATH=${RKDEV_PATH_PREFIX}:$PATH; find \"$HOME\" -type f ${RKDEV_FIND_EXPR} -print -quit"
+    OUTPUT_VARIABLE RKDEV_HOME_FIND_OUT
+    RESULT_VARIABLE RKDEV_HOME_FIND_RESULT
+  )
+  string(STRIP "${RKDEV_HOME_FIND_OUT}" RKDEV_HOME_FIND_OUT)
+  if(RKDEV_HOME_FIND_RESULT EQUAL 0 AND NOT RKDEV_HOME_FIND_OUT STREQUAL "")
+    execute_process(
+      COMMAND ${RKDEV_BASH} -lc "cygpath -w \"${RKDEV_HOME_FIND_OUT}\""
+      OUTPUT_VARIABLE RKDEV_SRC
+      RESULT_VARIABLE RKDEV_CYGPATH_RESULT
+    )
+    string(STRIP "${RKDEV_SRC}" RKDEV_SRC)
+    if(RKDEV_CYGPATH_RESULT EQUAL 0 AND NOT RKDEV_SRC STREQUAL "")
+      message(STATUS "Using rkdeveloptool binary at ${RKDEV_SRC}")
+      file(MAKE_DIRECTORY "${RKDEV_DEST_DIR}")
+      execute_process(
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${RKDEV_SRC}" "${RKDEV_DEST_DIR}"
+        RESULT_VARIABLE RKDEV_COPY_RESULT
+      )
+      if(NOT RKDEV_COPY_RESULT EQUAL 0)
+        message(FATAL_ERROR "Failed to copy rkdeveloptool from '${RKDEV_SRC}' to '${RKDEV_DEST_DIR}'")
+      endif()
+      return()
+    endif()
+  endif()
 endif()
 
 set(RKDEV_CANDIDATES)
