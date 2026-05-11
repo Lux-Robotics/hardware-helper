@@ -1,6 +1,7 @@
 #include "webview/webview.h"
 #include "rkdeveloptool_runner.h"
 #include "logging.h"
+#include "usb_driver_windows.h"
 #include "webview_bindings.h"
 
 #include <atomic>
@@ -137,6 +138,24 @@ int main()
             return std::string("true");
         });
 
+        w.bind("getUsbDriverInfo", [](const std::string&) {
+            const auto info = usb_driver::query_driver();
+            return std::string("{") +
+                "\"found\":" + (info.device_found ? "true" : "false") + "," +
+                "\"ok\":" + (info.is_libusb_win32 ? "true" : "false") + "," +
+                "\"driver\":" + bindings::js_string_literal(info.driver_name) + "," +
+                "\"error\":" + bindings::js_string_literal(info.error_message) +
+                "}";
+        });
+
+        w.bind("installUsbDriver", [](const std::string&) {
+            const auto result = usb_driver::install_libusb_win32();
+            return std::string("{") +
+                "\"success\":" + (result.success ? "true" : "false") + "," +
+                "\"error\":" + bindings::js_string_literal(result.error_message) +
+                "}";
+        });
+
         w.set_title("Hardware Helper");
         w.set_size(800, 600, WEBVIEW_HINT_NONE);
 
@@ -163,10 +182,12 @@ int main()
                     </div>
 
                     <div id="deviceInfo" style="color:#bbb; white-space:pre-wrap; min-height:24px;">check usb</div>
+                    <div id="driverStatus" style="color:#bbb; margin-top:8px; min-height:20px;"></div>
 
                     <div style="display:flex; gap:8px; margin-top:16px;">
                         <button id="pollingToggle">Pause Polling</button>
                         <button id="testLog">Test Log</button>
+                        <button id="installDriver">Install libusb-win32</button>
                     </div>
                 </div>
 
@@ -180,6 +201,8 @@ int main()
                     const deviceInfo = document.getElementById("deviceInfo");
                     const infoIcon = document.getElementById("infoIcon");
                     const pollingToggle = document.getElementById("pollingToggle");
+                    const driverStatus = document.getElementById("driverStatus");
+                    const installDriver = document.getElementById("installDriver");
 
                     function render() {
                         const connected = lastStatus === "connected";
@@ -192,12 +215,35 @@ int main()
                         } else {
                             deviceInfo.textContent = "check usb";
                             infoIcon.title = "check usb";
+                            driverStatus.textContent = "";
+                        }
+                    }
+
+                    async function refreshDriverInfo() {
+                        if (!window.getUsbDriverInfo) {
+                            driverStatus.textContent = "driver info unavailable";
+                            return;
+                        }
+                        const raw = await window.getUsbDriverInfo();
+                        const info = JSON.parse(raw);
+                        if (!info.found) {
+                            driverStatus.textContent = info.error || "device not found";
+                            return;
+                        }
+                        if (info.ok) {
+                            driverStatus.textContent = "Driver: " + (info.driver || "libusb-win32");
+                        } else {
+                            driverStatus.textContent = info.error || ("Driver: " + (info.driver || "unknown"));
                         }
                     }
 
                     window.updateDeviceStatus = (status) => {
+                        const changed = status !== lastStatus;
                         lastStatus = status;
                         render();
+                        if (changed && status === "connected") {
+                            refreshDriverInfo();
+                        }
                     };
 
                     window.updateDeviceInfo = (info) => {
@@ -213,6 +259,22 @@ int main()
 
                     document.getElementById("testLog").addEventListener("click", async () => {
                         await window.logWrite("[hardware-helper] Test log message");
+                    });
+
+                    installDriver.addEventListener("click", async () => {
+                        if (!window.installUsbDriver) {
+                            driverStatus.textContent = "driver install unavailable";
+                            return;
+                        }
+                        driverStatus.textContent = "Installing driver...";
+                        const raw = await window.installUsbDriver();
+                        const result = JSON.parse(raw);
+                        if (!result.success) {
+                            driverStatus.textContent = result.error || "driver install failed";
+                        } else {
+                            driverStatus.textContent = "driver installed";
+                        }
+                        refreshDriverInfo();
                     });
 
                     render();

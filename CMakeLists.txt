@@ -35,12 +35,70 @@ target_sources(hardware-helper PRIVATE
     src/logging.cpp
     src/logging.h
     src/webview_bindings.cpp
+    src/usb_driver_windows.cpp
+    src/usb_driver_windows.h
 )
 
 target_link_libraries(hardware-helper PRIVATE
     webview::core
     reproc++
 )
+
+if(WIN32)
+    option(LIBWDI_ENABLE "Build libwdi with embedded libusb-win32" ON)
+    set(LIBWDI_REPO "https://github.com/pbatard/libwdi.git" CACHE STRING "libwdi repository URL")
+    set(LIBWDI_TAG "v1.5.0" CACHE STRING "libwdi git tag or branch")
+    set(LIBWDI_BASH "C:/msys64/usr/bin/bash.exe" CACHE FILEPATH "Path to MSYS2 bash.exe for libwdi build")
+    set(LIBWDI_MSYSTEM "MINGW64" CACHE STRING "MSYS2 MSYSTEM for libwdi build")
+    set(LIBWDI_LIBUSB0_DIR "" CACHE PATH "Path to libusb-win32 driver files for embedding")
+
+    if(LIBWDI_ENABLE)
+        if(NOT EXISTS "${LIBWDI_BASH}")
+            message(FATAL_ERROR "LIBWDI_BASH not found. Install MSYS2 and set -DLIBWDI_BASH=... or disable with -DLIBWDI_ENABLE=OFF")
+        endif()
+
+        if(NOT LIBWDI_LIBUSB0_DIR)
+            message(FATAL_ERROR "LIBWDI_LIBUSB0_DIR not set. Point this to the libusb-win32 driver files directory.")
+        endif()
+
+        include(ExternalProject)
+
+        string(TOLOWER "${LIBWDI_MSYSTEM}" LIBWDI_MSYSTEM_LOWER)
+        set(LIBWDI_PATH_PREFIX "/${LIBWDI_MSYSTEM_LOWER}/bin:/usr/bin")
+        set(LIBWDI_PREFIX ${CMAKE_BINARY_DIR}/libwdi/install)
+        set(LIBWDI_SOURCE_DIR ${CMAKE_BINARY_DIR}/libwdi/src)
+        set(LIBWDI_CONFIGURE_CMD ${LIBWDI_BASH} -lc "export MSYSTEM=${LIBWDI_MSYSTEM} && export PATH=${LIBWDI_PATH_PREFIX}:$PATH && SRC_DIR=\$(cygpath -u '<SOURCE_DIR>') && PREFIX=\$(cygpath -u '${LIBWDI_PREFIX}') && LIBUSB0_DIR=\$(cygpath -u '${LIBWDI_LIBUSB0_DIR}') && cd \"$SRC_DIR\" && ./autogen.sh && ./configure --prefix=\"$PREFIX\" --with-libusb0=\"$LIBUSB0_DIR\" --enable-static=yes --enable-shared=no")
+        set(LIBWDI_BUILD_CMD ${LIBWDI_BASH} -lc "export MSYSTEM=${LIBWDI_MSYSTEM} && export PATH=${LIBWDI_PATH_PREFIX}:$PATH && SRC_DIR=\$(cygpath -u '<SOURCE_DIR>') && cd \"$SRC_DIR\" && make")
+        set(LIBWDI_INSTALL_CMD ${LIBWDI_BASH} -lc "export MSYSTEM=${LIBWDI_MSYSTEM} && export PATH=${LIBWDI_PATH_PREFIX}:$PATH && SRC_DIR=\$(cygpath -u '<SOURCE_DIR>') && cd \"$SRC_DIR\" && make install")
+
+        ExternalProject_Add(libwdi_ext
+            GIT_REPOSITORY ${LIBWDI_REPO}
+            GIT_TAG ${LIBWDI_TAG}
+            UPDATE_COMMAND ""
+            SOURCE_DIR ${LIBWDI_SOURCE_DIR}
+            BUILD_IN_SOURCE 1
+            CONFIGURE_COMMAND ${LIBWDI_CONFIGURE_CMD}
+            BUILD_COMMAND ${LIBWDI_BUILD_CMD}
+            INSTALL_COMMAND ${LIBWDI_INSTALL_CMD}
+        )
+
+        add_dependencies(hardware-helper libwdi_ext)
+
+        set(LIBWDI_INCLUDE_DIR ${LIBWDI_PREFIX}/include)
+        set(LIBWDI_LIBRARY ${LIBWDI_PREFIX}/lib/libwdi.a)
+    else()
+        find_path(LIBWDI_INCLUDE_DIR libwdi.h)
+        find_library(LIBWDI_LIBRARY NAMES wdi libwdi)
+    endif()
+
+    if(LIBWDI_INCLUDE_DIR AND LIBWDI_LIBRARY)
+        target_include_directories(hardware-helper PRIVATE ${LIBWDI_INCLUDE_DIR})
+        target_link_libraries(hardware-helper PRIVATE ${LIBWDI_LIBRARY})
+        target_compile_definitions(hardware-helper PRIVATE HAVE_LIBWDI=1)
+    else()
+        message(WARNING "libwdi not found; USB driver install support will be disabled")
+    endif()
+endif()
 
 option(RKDEV_ENABLE "Build rkdeveloptool with ExternalProject" ON)
 set(RKDEV_REPO "https://github.com/lux-robotics/rkdeveloptool.git" CACHE STRING "rkdeveloptool repository URL")

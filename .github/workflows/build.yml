@@ -24,6 +24,7 @@ jobs:
             msys2_libusb: mingw-w64-x86_64-libusb
             msys2_toolchain: mingw-w64-x86_64-toolchain
             rkdev_enable: true
+            libwdi_enable: true
 
           # Windows ARM64
           - os: windows-latest
@@ -33,6 +34,7 @@ jobs:
             msys2_libusb: mingw-w64-clang-aarch64-libusb
             msys2_toolchain: mingw-w64-clang-aarch64-toolchain
             rkdev_enable: false
+            libwdi_enable: false
 
           # Linux x64
           - os: ubuntu-24.04
@@ -60,7 +62,7 @@ jobs:
 
       # Windows dependencies (MSYS2 for rkdeveloptool)
       - name: Setup MSYS2
-        if: runner.os == 'Windows' && matrix.rkdev_enable
+        if: runner.os == 'Windows' && (matrix.rkdev_enable || matrix.libwdi_enable)
         uses: msys2/setup-msys2@v2
         with:
           msystem: ${{ matrix.msystem }}
@@ -74,9 +76,21 @@ jobs:
             ${{ matrix.msys2_toolchain }}
 
       - name: Ensure MSYS2 Toolchain
-        if: runner.os == 'Windows' && matrix.rkdev_enable
+        if: runner.os == 'Windows' && (matrix.rkdev_enable || matrix.libwdi_enable)
         run: |
           C:/msys64/usr/bin/bash.exe -lc "case '${{ matrix.msystem }}' in MINGW64) ROOT=/mingw64;; CLANGARM64) ROOT=/clangarm64;; esac; export MSYSTEM=${{ matrix.msystem }}; export PATH=$ROOT/bin:/usr/bin; pacman -S --noconfirm --needed autoconf automake libtool pkgconf make ${{ matrix.msys2_toolchain }} ${{ matrix.msys2_libusb }}"
+
+      - name: Download libusb-win32 driver files
+        if: runner.os == 'Windows' && matrix.libwdi_enable
+        run: |
+          $zip = "$env:RUNNER_TEMP\libusb-win32.zip"
+          $dir = "$env:RUNNER_TEMP\libusb-win32"
+          Invoke-WebRequest -Uri "https://github.com/libusb-win32/libusb-win32/releases/download/1.4.0.2/libusb-win32-bin-1.4.0.2.zip" -OutFile $zip
+          Expand-Archive -Force -Path $zip -DestinationPath $dir
+          $dll = Get-ChildItem -Path $dir -Recurse -Filter libusb0.dll | Select-Object -First 1
+          if (-not $dll) { throw "libusb0.dll not found in extracted archive" }
+          $driverDir = $dll.Directory.FullName
+          "LIBWDI_LIBUSB0_DIR=$driverDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       # Linux dependencies
       - name: Install Linux Dependencies
@@ -112,7 +126,7 @@ jobs:
       - name: Configure Windows
         if: runner.os == 'Windows'
         run: |
-          cmake -S . -B build -G "Visual Studio 17 2022" -A ${{ matrix.arch }} -DRKDEV_REPO=${{ env.RKDEV_REPO }} -DRKDEV_TAG=${{ env.RKDEV_TAG }} -DRKDEV_BASH=C:/msys64/usr/bin/bash.exe -DRKDEV_MSYSTEM=${{ matrix.msystem }} -DRKDEV_ENABLE=${{ matrix.rkdev_enable }}
+          cmake -S . -B build -G "Visual Studio 17 2022" -A ${{ matrix.arch }} -DRKDEV_REPO=${{ env.RKDEV_REPO }} -DRKDEV_TAG=${{ env.RKDEV_TAG }} -DRKDEV_BASH=C:/msys64/usr/bin/bash.exe -DRKDEV_MSYSTEM=${{ matrix.msystem }} -DRKDEV_ENABLE=${{ matrix.rkdev_enable }} -DLIBWDI_ENABLE=${{ matrix.libwdi_enable }} -DLIBWDI_LIBUSB0_DIR="${{ env.LIBWDI_LIBUSB0_DIR }}" -DLIBWDI_BASH=C:/msys64/usr/bin/bash.exe -DLIBWDI_MSYSTEM=${{ matrix.msystem }}
 
       # Configure Linux
       - name: Configure Linux
