@@ -85,7 +85,7 @@ jobs:
         run: |
           $zip = "$env:RUNNER_TEMP\libusb-win32.zip"
           $dir = "$env:RUNNER_TEMP\libusb-win32"
-          Invoke-WebRequest -Uri "https://github.com/libusb-win32/libusb-win32/releases/download/1.4.0.2/libusb-win32-bin-1.4.0.2.zip" -OutFile $zip
+          Invoke-WebRequest -Uri "https://github.com/mcuee/libusb-win32/releases/download/release_1.4.0.2/libusb-win32-bin-1.4.0.2.zip" -OutFile $zip
           Expand-Archive -Force -Path $zip -DestinationPath $dir
           $dll = Get-ChildItem -Path $dir -Recurse -Filter libusb0.dll | Select-Object -First 1
           if (-not $dll) { throw "libusb0.dll not found in extracted archive" }
