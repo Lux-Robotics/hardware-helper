@@ -101,7 +101,10 @@ jobs:
           if (-not (Test-Path $x86Sys) -or -not (Test-Path $x86Dll) -or -not (Test-Path $x64Sys) -or -not (Test-Path $x64Dll)) {
             throw "libusb-win32 driver files not found under $root"
           }
-          $driverDir = ($root -replace '\\','/')
+          $installRoot = "D:\libusb-win32"
+          if (Test-Path $installRoot) { Remove-Item -Recurse -Force $installRoot }
+          Copy-Item -Recurse -Force $root $installRoot
+          $driverDir = ($installRoot -replace '\\','/')
           "LIBWDI_LIBUSB0_DIR=$driverDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       # Linux dependencies
