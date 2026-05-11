@@ -35,8 +35,8 @@ target_sources(hardware-helper PRIVATE
     src/logging.cpp
     src/logging.h
     src/webview_bindings.cpp
-    src/windows_cmdline.cpp
-    src/windows_cmdline.h
+    src/windows_driver.cpp
+    src/windows_driver.h
     src/usb_driver_windows.cpp
     src/usb_driver_windows.h
 )

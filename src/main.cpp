@@ -3,7 +3,7 @@
 #include "logging.h"
 #include "usb_driver_windows.h"
 #include "webview_bindings.h"
-#include "windows_cmdline.h"
+#include "windows_driver.h"
 
 #include <atomic>
 #include <chrono>
@@ -25,6 +25,8 @@ namespace {
 std::atomic<bool> g_polling_enabled{true};
 std::atomic<bool> g_polling_stop{false};
 std::thread g_polling_thread;
+std::atomic<bool> g_driver_install_running{false};
+std::atomic<bool> g_webview_alive{false};
 
 void set_device_polling_enabled(bool enabled) {
     g_polling_enabled.store(enabled);
@@ -92,6 +94,35 @@ void start_device_polling(webview::webview& w) {
     });
 }
 
+bool start_driver_install(webview::webview& w, const std::string& device_name) {
+    bool expected = false;
+    if (!g_driver_install_running.compare_exchange_strong(expected, true)) {
+        return false;
+    }
+
+    webview::webview* wptr = &w;
+    std::thread([wptr, device_name]() {
+        usb_driver::InstallOptions options;
+        options.device_name = device_name;
+        const auto result = usb_driver::install_libusb_win32(options);
+        g_driver_install_running.store(false);
+
+        if (!g_webview_alive.load()) {
+            return;
+        }
+
+        const std::string payload = std::string("{") +
+            "\"success\":" + (result.success ? "true" : "false") + "," +
+            "\"error\":" + bindings::js_string_literal(result.error_message) +
+            "}";
+        wptr->dispatch([wptr, payload]() {
+            wptr->eval("window.onDriverInstallComplete && window.onDriverInstallComplete(" + payload + ")");
+        });
+    }).detach();
+
+    return true;
+}
+
 } // namespace
 
 #ifdef _WIN32
@@ -107,20 +138,9 @@ int main()
 {
     try {
 #ifdef _WIN32
-        const auto args = win_cli::get_command_line_args();
-        if (win_cli::has_flag(args, L"--install-driver")) {
-            usb_driver::InstallOptions options;
-            options.allow_elevation = false;
-            const auto device_name = win_cli::get_flag_value(args, L"--device-name");
-            if (!device_name.empty()) {
-                options.device_name = win_cli::wide_to_utf8(device_name);
-            }
-            const auto result = usb_driver::install_libusb_win32(options);
-            if (!result.success) {
-                logging::write("driver", "Elevated driver install failed: " + result.error_message);
-                return 1;
-            }
-            return 0;
+        int exit_code = 0;
+        if (win_driver::try_handle_driver_install_cli(exit_code)) {
+            return exit_code;
         }
 #endif
 #ifdef _WIN32
@@ -145,6 +165,7 @@ int main()
         setenv("WEBKIT_DISABLE_DMABUF_RENDERER", "1", 1);
 #endif
         webview::webview w(false, nullptr);
+        g_webview_alive.store(true);
 
         w.bind("setPollingEnabled", [](const std::string& req) {
             set_device_polling_enabled(bindings::parse_bool_arg(req, true));
@@ -166,13 +187,16 @@ int main()
                 "}";
         });
 
-        w.bind("installUsbDriver", [](const std::string& req) {
-            usb_driver::InstallOptions options;
-            options.device_name = bindings::parse_string_arg(req);
-            const auto result = usb_driver::install_libusb_win32(options);
+        w.bind("installUsbDriver", [&w](const std::string& req) {
+            const std::string device_name = bindings::parse_string_arg(req);
+            if (!start_driver_install(w, device_name)) {
+                return std::string("{") +
+                    "\"started\":false," +
+                    "\"error\":" + bindings::js_string_literal("driver install already in progress") +
+                    "}";
+            }
             return std::string("{") +
-                "\"success\":" + (result.success ? "true" : "false") + "," +
-                "\"error\":" + bindings::js_string_literal(result.error_message) +
+                "\"started\":true" +
                 "}";
         });
 
@@ -215,6 +239,7 @@ int main()
                     let pollingEnabled = true;
                     let lastInfo = "";
                     let lastStatus = "disconnected";
+                    let driverInstallRunning = false;
                     const driverDeviceName = "Rockchip Bootloader Device";
 
                     const statusDot = document.getElementById("statusDot");
@@ -236,7 +261,17 @@ int main()
                         } else {
                             deviceInfo.textContent = "check usb";
                             infoIcon.title = "check usb";
-                            driverStatus.textContent = "";
+                            if (!driverInstallRunning) {
+                                driverStatus.textContent = "";
+                            }
+                        }
+                    }
+
+                    function setDriverInstallRunning(running) {
+                        driverInstallRunning = running;
+                        installDriver.disabled = running;
+                        if (running) {
+                            driverStatus.textContent = "Installing driver... (this may take a while)";
                         }
                     }
 
@@ -287,16 +322,27 @@ int main()
                             driverStatus.textContent = "driver install unavailable";
                             return;
                         }
-                        driverStatus.textContent = "Installing driver...";
+                        if (driverInstallRunning) {
+                            return;
+                        }
+                        setDriverInstallRunning(true);
                         const raw = await window.installUsbDriver(driverDeviceName);
                         const result = JSON.parse(raw);
-                        if (!result.success) {
-                            driverStatus.textContent = result.error || "driver install failed";
+                        if (!result.started) {
+                            setDriverInstallRunning(false);
+                            driverStatus.textContent = result.error || "driver install already in progress";
+                        }
+                    });
+
+                    window.onDriverInstallComplete = (result) => {
+                        setDriverInstallRunning(false);
+                        if (!result || !result.success) {
+                            driverStatus.textContent = (result && result.error) || "driver install failed";
                         } else {
                             driverStatus.textContent = "driver installed";
                         }
                         refreshDriverInfo();
-                    });
+                    };
 
                     render();
                 </script>
@@ -307,9 +353,11 @@ int main()
         start_device_polling(w);
 
         w.run();
+        g_webview_alive.store(false);
     }
     catch (const webview::exception& e) {
         std::cerr << e.what() << '\n';
+        g_webview_alive.store(false);
         return 1;
     }
 

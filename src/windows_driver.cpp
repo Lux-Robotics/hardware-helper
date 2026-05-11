@@ -1,11 +1,18 @@
-#include "windows_cmdline.h"
+#include "windows_driver.h"
 
 #ifdef _WIN32
+
+#include "logging.h"
+#include "usb_driver_windows.h"
 
 #include <shellapi.h>
 #include <windows.h>
 
-namespace win_cli {
+#include <string>
+#include <vector>
+
+namespace win_driver {
+namespace {
 
 std::vector<std::wstring> get_command_line_args() {
     int argc = 0;
@@ -59,6 +66,31 @@ std::string wide_to_utf8(const std::wstring& input) {
     return out;
 }
 
-} // namespace win_cli
+} // namespace
+
+bool try_handle_driver_install_cli(int& exit_code) {
+    const auto args = get_command_line_args();
+    if (!has_flag(args, L"--install-driver")) {
+        return false;
+    }
+
+    usb_driver::InstallOptions options;
+    options.allow_elevation = false;
+    const auto device_name = get_flag_value(args, L"--device-name");
+    if (!device_name.empty()) {
+        options.device_name = wide_to_utf8(device_name);
+    }
+
+    const auto result = usb_driver::install_libusb_win32(options);
+    if (!result.success) {
+        logging::write("driver", "Elevated driver install failed: " + result.error_message);
+        exit_code = 1;
+    } else {
+        exit_code = 0;
+    }
+    return true;
+}
+
+} // namespace win_driver
 
 #endif
