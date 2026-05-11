@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(hardware-helper LANGUAGES CXX)
+project(hardware-helper LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -45,47 +45,115 @@ target_link_libraries(hardware-helper PRIVATE
 )
 
 if(WIN32)
-    option(LIBWDI_ENABLE "Build libwdi with embedded libusb-win32" ON)
+    option(LIBWDI_ENABLE "Build libwdi with native MSVC sources" ON)
     set(LIBWDI_REPO "https://github.com/pbatard/libwdi.git" CACHE STRING "libwdi repository URL")
     set(LIBWDI_TAG "v1.5.0" CACHE STRING "libwdi git tag or branch")
-    set(LIBWDI_BASH "C:/msys64/usr/bin/bash.exe" CACHE FILEPATH "Path to MSYS2 bash.exe for libwdi build")
-    set(LIBWDI_MSYSTEM "MINGW64" CACHE STRING "MSYS2 MSYSTEM for libwdi build")
     set(LIBWDI_LIBUSB0_DIR "" CACHE PATH "Path to libusb-win32 driver files for embedding")
 
     if(LIBWDI_ENABLE)
-        if(NOT EXISTS "${LIBWDI_BASH}")
-            message(FATAL_ERROR "LIBWDI_BASH not found. Install MSYS2 and set -DLIBWDI_BASH=... or disable with -DLIBWDI_ENABLE=OFF")
-        endif()
-
         if(NOT LIBWDI_LIBUSB0_DIR)
             message(FATAL_ERROR "LIBWDI_LIBUSB0_DIR not set. Point this to the libusb-win32 driver files directory.")
         endif()
 
-        include(ExternalProject)
-
-        string(TOLOWER "${LIBWDI_MSYSTEM}" LIBWDI_MSYSTEM_LOWER)
-        set(LIBWDI_PATH_PREFIX "/${LIBWDI_MSYSTEM_LOWER}/bin:/usr/bin")
-        set(LIBWDI_PREFIX ${CMAKE_BINARY_DIR}/libwdi/install)
-        set(LIBWDI_SOURCE_DIR ${CMAKE_BINARY_DIR}/libwdi/src)
-        set(LIBWDI_CONFIGURE_CMD ${LIBWDI_BASH} ${CMAKE_SOURCE_DIR}/cmake/libwdi_configure.sh "<SOURCE_DIR>" "${LIBWDI_PREFIX}" "${LIBWDI_LIBUSB0_DIR}" "${LIBWDI_MSYSTEM}")
-        set(LIBWDI_BUILD_CMD ${LIBWDI_BASH} -lc "export MSYSTEM=${LIBWDI_MSYSTEM} && export PATH=${LIBWDI_PATH_PREFIX}:$PATH && SRC_DIR=\$(cygpath -u '<SOURCE_DIR>') && cd \"$SRC_DIR\" && make")
-        set(LIBWDI_INSTALL_CMD ${LIBWDI_BASH} -lc "export MSYSTEM=${LIBWDI_MSYSTEM} && export PATH=${LIBWDI_PATH_PREFIX}:$PATH && SRC_DIR=\$(cygpath -u '<SOURCE_DIR>') && cd \"$SRC_DIR\" && make install")
-
-        ExternalProject_Add(libwdi_ext
+        include(FetchContent)
+        FetchContent_Declare(
+            libwdi
             GIT_REPOSITORY ${LIBWDI_REPO}
             GIT_TAG ${LIBWDI_TAG}
-            UPDATE_COMMAND ""
-            SOURCE_DIR ${LIBWDI_SOURCE_DIR}
-            BUILD_IN_SOURCE 1
-            CONFIGURE_COMMAND ${LIBWDI_CONFIGURE_CMD}
-            BUILD_COMMAND ${LIBWDI_BUILD_CMD}
-            INSTALL_COMMAND ${LIBWDI_INSTALL_CMD}
+        )
+        FetchContent_GetProperties(libwdi)
+        if(NOT libwdi_POPULATED)
+            FetchContent_Populate(libwdi)
+        endif()
+
+        set(LIBWDI_SRC_DIR ${libwdi_SOURCE_DIR}/libwdi)
+        set(LIBWDI_GENERATED_DIR ${CMAKE_BINARY_DIR}/libwdi/generated)
+        set(LIBWDI_INSTALLER_DIR ${CMAKE_BINARY_DIR}/libwdi/installer)
+        file(MAKE_DIRECTORY ${LIBWDI_GENERATED_DIR})
+        file(MAKE_DIRECTORY ${LIBWDI_INSTALLER_DIR})
+
+        set(LIBWDI_LIBUSB0_DIR_CONFIG "${LIBWDI_LIBUSB0_DIR}")
+        file(TO_CMAKE_PATH "${LIBWDI_LIBUSB0_DIR_CONFIG}" LIBWDI_LIBUSB0_DIR_CONFIG)
+
+        if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+            set(LIBWDI_OPT_M64 1)
+            set(LIBWDI_OPT_M32 0)
+            set(LIBWDI_INSTALLER_NAME installer_x64)
+        else()
+            set(LIBWDI_OPT_M64 0)
+            set(LIBWDI_OPT_M32 1)
+            set(LIBWDI_INSTALLER_NAME installer_x86)
+        endif()
+
+        configure_file(
+            ${CMAKE_SOURCE_DIR}/cmake/libwdi_config.h.in
+            ${LIBWDI_GENERATED_DIR}/config.h
+            @ONLY
         )
 
-        add_dependencies(hardware-helper libwdi_ext)
+        file(TO_NATIVE_PATH "${LIBWDI_INSTALLER_DIR}" LIBWDI_INSTALLER_DIR_NATIVE)
+        string(REPLACE "\\" "\\\\" LIBWDI_INSTALLER_DIR_ESCAPED "${LIBWDI_INSTALLER_DIR_NATIVE}")
 
-        set(LIBWDI_INCLUDE_DIR ${LIBWDI_PREFIX}/include)
-        set(LIBWDI_LIBRARY ${LIBWDI_PREFIX}/lib/libwdi.a)
+        add_executable(libwdi_installer ${LIBWDI_SRC_DIR}/installer.c)
+        set_target_properties(libwdi_installer PROPERTIES OUTPUT_NAME ${LIBWDI_INSTALLER_NAME})
+        set_target_properties(libwdi_installer PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY ${LIBWDI_INSTALLER_DIR}
+            RUNTIME_OUTPUT_DIRECTORY_DEBUG ${LIBWDI_INSTALLER_DIR}
+            RUNTIME_OUTPUT_DIRECTORY_RELEASE ${LIBWDI_INSTALLER_DIR}
+            RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO ${LIBWDI_INSTALLER_DIR}
+            RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL ${LIBWDI_INSTALLER_DIR}
+        )
+        target_include_directories(libwdi_installer PRIVATE
+            ${LIBWDI_GENERATED_DIR}
+            ${LIBWDI_SRC_DIR}
+            ${libwdi_SOURCE_DIR}/msvc
+        )
+        target_link_libraries(libwdi_installer PRIVATE setupapi newdev ole32)
+
+        add_executable(libwdi_embedder ${LIBWDI_SRC_DIR}/embedder.c)
+        target_include_directories(libwdi_embedder PRIVATE
+            ${LIBWDI_GENERATED_DIR}
+            ${LIBWDI_SRC_DIR}
+            ${libwdi_SOURCE_DIR}/msvc
+        )
+        target_compile_definitions(libwdi_embedder PRIVATE
+            DDKBUILD
+            SOLUTIONDIR="${LIBWDI_INSTALLER_DIR_ESCAPED}"
+        )
+
+        add_custom_command(
+            OUTPUT ${LIBWDI_GENERATED_DIR}/embedded.h
+            COMMAND libwdi_embedder ${LIBWDI_GENERATED_DIR}/embedded.h
+            DEPENDS libwdi_embedder libwdi_installer
+            WORKING_DIRECTORY ${LIBWDI_SRC_DIR}
+        )
+        add_custom_target(libwdi_embedded_header DEPENDS ${LIBWDI_GENERATED_DIR}/embedded.h)
+
+        add_library(libwdi STATIC
+            ${LIBWDI_SRC_DIR}/logging.c
+            ${LIBWDI_SRC_DIR}/tokenizer.c
+            ${LIBWDI_SRC_DIR}/vid_data.c
+            ${LIBWDI_SRC_DIR}/pki.c
+            ${LIBWDI_SRC_DIR}/libwdi_dlg.c
+            ${LIBWDI_SRC_DIR}/libwdi.c
+            ${LIBWDI_SRC_DIR}/resource.h
+            ${LIBWDI_SRC_DIR}/logging.h
+            ${LIBWDI_SRC_DIR}/tokenizer.h
+            ${LIBWDI_SRC_DIR}/installer.h
+            ${LIBWDI_SRC_DIR}/libwdi_i.h
+            ${LIBWDI_SRC_DIR}/mssign32.h
+            ${LIBWDI_GENERATED_DIR}/embedded.h
+        )
+        add_dependencies(libwdi libwdi_embedded_header)
+        target_include_directories(libwdi PUBLIC
+            ${LIBWDI_GENERATED_DIR}
+            ${LIBWDI_SRC_DIR}
+            ${libwdi_SOURCE_DIR}/msvc
+        )
+        target_link_libraries(libwdi PUBLIC setupapi ole32 ntdll)
+
+        set(LIBWDI_INCLUDE_DIR ${LIBWDI_SRC_DIR})
+        set(LIBWDI_LIBRARY libwdi)
     else()
         find_path(LIBWDI_INCLUDE_DIR libwdi.h)
         find_library(LIBWDI_LIBRARY NAMES wdi libwdi)
