@@ -15,7 +15,7 @@ case "$MSYSTEM_NAME" in
 export PATH="$ROOT/bin:/usr/bin"
 
 SITE="/tmp/libwdi_site"
-printf "WDK_DIR=\nwith_wdkdir=\n" > "$SITE"
+printf "WDK_DIR=\nwith_wdkdir=\nenable_32bit=no\nenable_64bit=yes\n" > "$SITE"
 export CONFIG_SITE="$SITE"
 export WDK_DIR=
 export with_wdkdir=
