@@ -38,6 +38,7 @@ std::atomic<bool> g_polling_stop{false};
 std::thread g_polling_thread;
 std::atomic<bool> g_driver_install_running{false};
 std::atomic<bool> g_webview_alive{false};
+std::atomic<bool> g_ui_ready{false};
 std::atomic<bool> g_flash_running{false};
 std::atomic<unsigned int> g_last_detected_vid{0};
 std::atomic<unsigned int> g_last_detected_pid{0};
@@ -288,14 +289,20 @@ int main()
             SetEnvironmentVariableW(L"WEBVIEW2_USER_DATA_FOLDER", user_data_dir.c_str());
         }
 
+#if defined(HWHELPER_DISABLE_GPU)
         SetEnvironmentVariableW(
             L"WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
             L"--disable-gpu --disable-gpu-compositing --disable-extensions --disable-features=BackForwardCache --no-first-run --disable-background-networking --disable-component-update");
+#endif
     #elif defined(__APPLE__)
+    #if defined(HWHELPER_DISABLE_GPU)
         setenv("WEBKIT_DISABLE_COMPOSITING_MODE", "1", 1);
+    #endif
     #elif defined(__linux__)
+    #if defined(HWHELPER_DISABLE_GPU)
         setenv("WEBKIT_DISABLE_COMPOSITING_MODE", "1", 1);
         setenv("WEBKIT_DISABLE_DMABUF_RENDERER", "1", 1);
+    #endif
 #endif
         webview::webview w(false, nullptr);
         g_webview_alive.store(true);
@@ -307,6 +314,14 @@ int main()
 
         w.bind("logWrite", [](const std::string& req) {
             logging::write(bindings::parse_string_arg(req));
+            return std::string("true");
+        });
+
+        w.bind("uiReady", [&w](const std::string&) {
+            bool expected = false;
+            if (g_ui_ready.compare_exchange_strong(expected, true)) {
+                start_device_polling(w);
+            }
             return std::string("true");
         });
 
@@ -438,7 +453,19 @@ int main()
                 align-items:center;
                 justify-content:center;
             ">
-                <div style="max-width:640px; width:100%; padding:24px;">
+                    <div id="loadingOverlay" style="
+                        position:fixed;
+                        inset:0;
+                        background:#111;
+                        display:flex;
+                        align-items:center;
+                        justify-content:center;
+                        font-size:14px;
+                        color:#bbb;
+                        z-index:10;
+                    ">Loading...</div>
+
+                    <div style="max-width:640px; width:100%; padding:24px;">
                     <h1 style="margin:0 0 16px 0;">Hardware Helper</h1>
 
                     <div style="display:flex; align-items:center; gap:12px; margin-bottom:12px;">
@@ -486,6 +513,8 @@ int main()
                     let flashRunning = false;
                     let selectedImagePath = "";
                     let logVisible = false;
+                    let logLoaded = false;
+                    let logCleared = false;
                     const driverDeviceName = "Rockchip Bootloader Device";
 
                     const statusDot = document.getElementById("statusDot");
@@ -511,6 +540,8 @@ int main()
                         const connected = lastStatus === "connected";
                         statusDot.style.background = connected ? "#2fa84f" : "#a33";
                         statusText.textContent = lastStatus;
+                        flashBootloader.disabled = flashRunning || !connected;
+                        flashImage.disabled = flashRunning || !connected;
                         if (connected) {
                             const text = lastInfo.trim() || "device connected";
                             deviceInfo.textContent = text;
@@ -584,12 +615,13 @@ int main()
                         logVisible = !logVisible;
                         logPanel.style.display = logVisible ? "block" : "none";
                         toggleLog.textContent = logVisible ? "Hide Log" : "Show Log";
-                        if (logVisible && window.getLogContents) {
+                        if (logVisible && window.getLogContents && !logLoaded && !logCleared) {
                             window.getLogContents().then(raw => {
                                 try {
                                     const result = JSON.parse(raw);
                                     liveLog.value = (result && result.text) ? result.text : "";
                                     liveLog.scrollTop = liveLog.scrollHeight;
+                                    logLoaded = true;
                                 } catch (e) {
                                     liveLog.value = "";
                                 }
@@ -610,6 +642,7 @@ int main()
 
                     clearLog.addEventListener("click", () => {
                         liveLog.value = "";
+                        logCleared = true;
                     });
 
                     document.getElementById("testLog").addEventListener("click", async () => {
@@ -719,13 +752,25 @@ int main()
                         liveLog.scrollTop = liveLog.scrollHeight;
                     };
 
+                    window.addEventListener("load", () => {
+                        requestAnimationFrame(() => {
+                            const overlay = document.getElementById("loadingOverlay");
+                            if (overlay) {
+                                overlay.style.display = "none";
+                            }
+                            setTimeout(() => {
+                                if (window.uiReady) {
+                                    window.uiReady();
+                                }
+                            }, 0);
+                        });
+                    });
+
                     render();
                 </script>
             </body>
             </html>
         )HTML");
-
-        start_device_polling(w);
 
         w.run();
         g_webview_alive.store(false);

@@ -7,6 +7,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 
+option(HWHELPER_DISABLE_GPU "Disable GPU usage in embedded browser" ON)
+
 include(FetchContent)
 
 FetchContent_Declare(
@@ -53,6 +55,16 @@ target_link_libraries(hardware-helper PRIVATE
     webview::core
     reproc++
 )
+
+if(TARGET hardware-helper)
+    target_compile_options(hardware-helper PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wno-error=changes-meaning>
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wno-changes-meaning>
+    )
+    if(HWHELPER_DISABLE_GPU)
+        target_compile_definitions(hardware-helper PRIVATE HWHELPER_DISABLE_GPU=1)
+    endif()
+endif()
 
 if(WIN32)
     target_link_libraries(hardware-helper PRIVATE shell32)
