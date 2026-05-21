@@ -71,8 +71,11 @@ jobs:
       # Configure Windows
       - name: Configure Windows
         if: runner.os == 'Windows'
+        shell: cmd
         run: |
-          cmake -S . -B build -G "Visual Studio 17 2022" -A ${{ matrix.arch }} -DRKDEV_REPO=${{ env.RKDEV_REPO }} -DRKDEV_TAG=${{ env.RKDEV_TAG }} -DRKDEV_BASH=C:/msys64/usr/bin/bash.exe -DRKDEV_MSYSTEM=${{ matrix.msystem }} -DRKDEV_ENABLE=${{ matrix.rkdev_enable }} -DLIBWDI_ENABLE=${{ matrix.libwdi_enable }} -DLIBWDI_LIBUSB0_DIR="${{ env.LIBWDI_LIBUSB0_DIR }}"
+          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set VSINSTALL=%%i
+          call "%VSINSTALL%\VC\Auxiliary\Build\vcvars64.bat"
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DRKDEV_REPO=${{ env.RKDEV_REPO }} -DRKDEV_TAG=${{ env.RKDEV_TAG }} -DRKDEV_BASH=C:/msys64/usr/bin/bash.exe -DRKDEV_MSYSTEM=${{ matrix.msystem }} -DRKDEV_ENABLE=${{ matrix.rkdev_enable }} -DLIBWDI_ENABLE=${{ matrix.libwdi_enable }} -DLIBWDI_LIBUSB0_DIR="${{ env.LIBWDI_LIBUSB0_DIR }}"
 
       # Configure Linux
       - name: Configure Linux
@@ -117,9 +120,3 @@ jobs:
             -T "upload_pkg/${{ matrix.name }}.tar.gz" \
             "$DEST_PATH"
           echo "Upload complete"
-
-      - name: Artifactory Upload Skipped
-        if: ${{ env.ARTIFACTORY_URL == '' || env.ARTIFACTORY_REPO == '' || env.ARTIFACTORY_USER == '' || env.ARTIFACTORY_TOKEN == '' }}
-        shell: bash
-        run: |
-          echo "Skipping Artifactory upload: missing ARTIFACTORY_URL/ARTIFACTORY_REPO/ARTIFACTORY_USER/ARTIFACTORY_TOKEN"
