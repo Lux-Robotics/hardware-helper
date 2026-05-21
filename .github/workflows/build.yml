@@ -94,8 +94,18 @@ jobs:
             -DRKDEV_TAG=${{ env.RKDEV_TAG }} \
             -DCMAKE_OSX_ARCHITECTURES=${{ matrix.osx_arch }}
           
-      # Build
-      - name: Build
+      # Build (Windows)
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set VSINSTALL=%%i
+          call "%VSINSTALL%\VC\Auxiliary\Build\vcvars64.bat"
+          cmake --build build --config Release
+
+      # Build (Linux/macOS)
+      - name: Build (Unix)
+        if: runner.os != 'Windows'
         run: |
           cmake --build build --config Release
 
