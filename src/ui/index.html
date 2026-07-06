@@ -31,8 +31,8 @@
         <div style="display:flex; gap:8px; margin-top:16px; flex-wrap:wrap;">
             <button id="connectDevice" style="display:none; background:#2a6fd9; color:white;">Connect</button>
             <button id="selectImage">Select .img</button>
-            <button id="flashBootloader">Flash Bootloader</button>
             <button id="flashImage">Flash Image</button>
+            <button id="backupEmmc">Backup eMMC</button>
             <button id="eraseEmmc" style="background:#a33; color:white;">Erase eMMC</button>
             <button id="cancelFlash" style="display:none; background:#a33; color:white;">Cancel</button>
         </div>
@@ -57,6 +57,15 @@
             <div style="display:flex; gap:8px; justify-content:flex-end;">
                 <button id="confirmCancelBtn">Go Back</button>
                 <button id="confirmOkBtn" style="background:#a33; color:white;">Confirm</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="alertModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); align-items:center; justify-content:center; z-index:1000;">
+        <div style="background:#222; border:1px solid #555; border-radius:8px; padding:20px; max-width:420px;">
+            <div id="alertMessage" style="margin-bottom:16px; white-space:pre-wrap; color:#eee;"></div>
+            <div style="display:flex; gap:8px; justify-content:flex-end;">
+                <button id="alertOkBtn">OK</button>
             </div>
         </div>
     </div>
