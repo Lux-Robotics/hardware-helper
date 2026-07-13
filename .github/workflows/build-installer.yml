@@ -92,7 +92,9 @@ jobs:
           cross: "true"
           rkdev_cross_host: aarch64-w64-mingw32
           llvm_mingw_dir: C:/llvm-mingw
-          cross_libusb_prefix: C:/libusb-arm64
+          # Built from source by the "Build arm64 libusb" step below (short
+          # path, out of the deep workspace), not assumed pre-installed.
+          cross_libusb_prefix: C:/w/libusb-arm64
 
         # ---------- Linux (x64 only; no arm64 runner / no cross yet) ----------
         - name: Linux_x64_installer
@@ -141,6 +143,16 @@ jobs:
             -DLIBWDI_OUTPUT_DIR="%OUTDIR%"
           cmake --build build_libwdi_host --config Release
           echo LIBWDI_PREBUILT_ARG=-DLIBWDI_PREBUILT_GENERATED_DIR=%OUTDIR%>>%GITHUB_ENV%
+
+      # Windows arm64 cross only: build libusb-1.0 from source with the
+      # llvm-mingw cross toolchain (no prebuilt arm64 libusb exists for an x64
+      # host). rkdeveloptool links this and ships its DLL. Mirrors the macOS
+      # "Stage arm64 libusb" step - built by CI, not assumed on the runner.
+      - name: Build arm64 libusb (Windows cross)
+        if: ${{ matrix.os == 'windows' && matrix.cross == 'true' }}
+        shell: cmd
+        run: |
+          C:\msys64\usr\bin\bash -lc "set -e && export PATH=$(cygpath -u '${{ matrix.llvm_mingw_dir }}')/bin:$PATH && PREFIX=$(cygpath -u '${{ matrix.cross_libusb_prefix }}') && SCRIPT=$(cygpath -u '%GITHUB_WORKSPACE%')/cmake/build_libusb_mingw.sh && bash \"$SCRIPT\" \"${{ matrix.rkdev_cross_host }}\" \"$PREFIX\""
 
       - name: Configure Windows
         if: matrix.os == 'windows'

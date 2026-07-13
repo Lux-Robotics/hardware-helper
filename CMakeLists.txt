@@ -252,7 +252,10 @@ if(TARGET rockchip-universal-imager)
 endif()
 
 if(WIN32)
-    target_link_libraries(rockchip-universal-imager PRIVATE shell32)
+    # shell32: ShellExecute (open log folder). setupapi: USB device
+    # enumeration; user32: message-only window + RegisterDeviceNotification for
+    # native WM_DEVICECHANGE-based detection (usb_monitor.cpp).
+    target_link_libraries(rockchip-universal-imager PRIVATE shell32 setupapi user32)
     option(LIBWDI_ENABLE "Build libwdi with native MSVC sources" ON)
     set(LIBWDI_REPO "https://github.com/pbatard/libwdi.git" CACHE STRING "libwdi repository URL")
     set(LIBWDI_TAG "v1.5.0" CACHE STRING "libwdi git tag or branch")
