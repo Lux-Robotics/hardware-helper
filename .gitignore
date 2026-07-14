@@ -4,19 +4,14 @@
 .vscode/
 *.swp
 
-# C++ leftovers (should not reappear)
-build/
-out/
-compile_commands.json
-cmake-build-*/
-embedded/
-
 # Rust / Tauri
-apps/**/src-tauri/target/
-apps/**/node_modules/
+src-tauri/target/
 dist/
 *.log
 log/
+
+# Tauri generated
+src-tauri/gen/
 
 # Local env
 .env

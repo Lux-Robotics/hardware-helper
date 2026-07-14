@@ -1,0 +1,232 @@
+# Portable packages (self-contained workflow — no packaging/*.sh).
+#
+# Per OS/arch zip:
+#   rockchip-universal-imager[.exe]
+#   rkdeveloptool[.exe]
+#   loader_binaries/
+#   portable
+#   (+ libusb-1.0.dll on Windows when MinGW-built)
+#
+# Matrix: macOS aarch64, Ubuntu x86_64, Windows x86_64.
+
+name: Portable
+
+on:
+  push:
+    branches: [main, master, "port/**", "ci/**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: portable-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  portable:
+    name: portable (${{ matrix.os_label }}-${{ matrix.arch_label }})
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest
+            os_label: macos
+            arch_label: aarch64
+            app_name: rockchip-universal-imager
+            rk_name: rkdeveloptool
+          - runner: ubuntu-22.04
+            os_label: linux
+            arch_label: x86_64
+            app_name: rockchip-universal-imager
+            rk_name: rkdeveloptool
+          - runner: windows-latest
+            os_label: windows
+            arch_label: x86_64
+            app_name: rockchip-universal-imager.exe
+            rk_name: rkdeveloptool.exe
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Linux system deps
+        if: matrix.os_label == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential curl wget file \
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+            librsvg2-dev patchelf \
+            libssl-dev \
+            libusb-1.0-0-dev libudev-dev \
+            pkg-config autoconf automake libtool \
+            zip
+
+      - name: Install macOS system deps
+        if: matrix.os_label == 'macos'
+        run: brew install libusb pkg-config automake autoconf libtool zip || true
+
+      - name: Install Windows MSYS2 (rkdeveloptool + zip)
+        if: matrix.os_label == 'windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-libusb
+            mingw-w64-x86_64-pkg-config
+            autoconf
+            automake
+            libtool
+            make
+            zip
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install tauri-cli
+        run: cargo install tauri-cli --version "^2" --locked
+
+      # --- rkdeveloptool (C++) ---
+
+      - name: Build rkdeveloptool (macOS / Linux)
+        if: matrix.os_label != 'windows'
+        run: |
+          set -euo pipefail
+          SRC="${{ github.workspace }}/dependencies/rkdeveloptool"
+          BUILD="${{ github.workspace }}/dependencies/rkdeveloptool-build"
+          OUT_DIR="${{ github.workspace }}/dist/companions"
+          mkdir -p "$BUILD" "$OUT_DIR"
+          test -d "$SRC"
+
+          if [[ ! -x "$SRC/configure" ]]; then
+            (cd "$SRC" && ./autogen.sh)
+          fi
+          (
+            cd "$BUILD"
+            "$SRC/configure"
+            make -j"$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)"
+          )
+
+          BUILT=""
+          for c in "$BUILD/rkdeveloptool" "$BUILD/.libs/rkdeveloptool"; do
+            [[ -f "$c" ]] && BUILT="$c" && break
+          done
+          test -n "$BUILT"
+          cp "$BUILT" "$OUT_DIR/rkdeveloptool"
+          chmod +x "$OUT_DIR/rkdeveloptool"
+          echo "RKDEV_BIN=$OUT_DIR/rkdeveloptool" >> "$GITHUB_ENV"
+
+      - name: Build rkdeveloptool (Windows / MSYS2 MinGW)
+        if: matrix.os_label == 'windows'
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          export PATH="/mingw64/bin:$PATH"
+          SRC="$GITHUB_WORKSPACE/dependencies/rkdeveloptool"
+          BUILD="$GITHUB_WORKSPACE/dependencies/rkdeveloptool-build"
+          OUT_DIR="$GITHUB_WORKSPACE/dist/companions"
+          mkdir -p "$BUILD" "$OUT_DIR"
+
+          if [[ ! -x "$SRC/configure" ]]; then
+            (cd "$SRC" && ./autogen.sh)
+          fi
+          (
+            cd "$BUILD"
+            "$SRC/configure"
+            make -j"$(nproc 2>/dev/null || echo 2)"
+          )
+
+          BUILT=""
+          for c in "$BUILD/rkdeveloptool.exe" "$BUILD/rkdeveloptool" \
+                   "$BUILD/.libs/rkdeveloptool.exe" "$BUILD/.libs/rkdeveloptool"; do
+            [[ -f "$c" ]] && BUILT="$c" && break
+          done
+          test -n "$BUILT"
+          cp "$BUILT" "$OUT_DIR/rkdeveloptool.exe"
+          ls -la "$OUT_DIR"
+
+      - name: Record RKDEV_BIN (Windows)
+        if: matrix.os_label == 'windows'
+        run: |
+          echo "RKDEV_BIN=${{ github.workspace }}/dist/companions/rkdeveloptool.exe" >> "$GITHUB_ENV"
+          test -f "${{ github.workspace }}/dist/companions/rkdeveloptool.exe"
+
+      # --- Tauri / Rust app ---
+
+      - name: Build Tauri app (raw binary, no OS installer shell)
+        run: cargo tauri build --no-bundle
+        working-directory: ${{ github.workspace }}
+
+      # --- Stage + zip (portable) ---
+
+      - name: Package portable zip
+        run: |
+          set -euo pipefail
+          OS="${{ matrix.os_label }}"
+          ARCH="${{ matrix.arch_label }}"
+          APP_NAME="${{ matrix.app_name }}"
+          RK_NAME="${{ matrix.rk_name }}"
+          APP_BIN="${{ github.workspace }}/src-tauri/target/release/${APP_NAME}"
+          RKDEV_BIN="${RKDEV_BIN}"
+          LOADER_SRC="${{ github.workspace }}/loader_binaries"
+          FOLDER="rockchip-universal-imager-portable-${OS}-${ARCH}"
+          STAGE="${{ github.workspace }}/dist/portable/staging/${FOLDER}"
+          ZIP="${{ github.workspace }}/dist/portable/${FOLDER}.zip"
+
+          test -f "$APP_BIN"
+          test -f "$RKDEV_BIN"
+
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE/loader_binaries"
+          cp "$APP_BIN" "$STAGE/$APP_NAME"
+          cp "$RKDEV_BIN" "$STAGE/$RK_NAME"
+          chmod +x "$STAGE/$APP_NAME" "$STAGE/$RK_NAME" 2>/dev/null || true
+
+          if [[ -d "$LOADER_SRC" ]]; then
+            cp -R "$LOADER_SRC"/. "$STAGE/loader_binaries/" 2>/dev/null || true
+          fi
+
+          # Windows MinGW companion needs libusb beside it outside MSYS2
+          if [[ "$OS" == "windows" ]]; then
+            for d in /mingw64/bin "C:/msys64/mingw64/bin" "/c/msys64/mingw64/bin"; do
+              if [[ -f "$d/libusb-1.0.dll" ]]; then
+                cp "$d/libusb-1.0.dll" "$STAGE/"
+                break
+              fi
+            done
+          fi
+
+          # Portable marker (paths::is_portable_build)
+          : >"$STAGE/portable"
+
+          mkdir -p "$(dirname "$ZIP")"
+          (
+            cd "${{ github.workspace }}/dist/portable/staging"
+            rm -f "$ZIP"
+            zip -r "$ZIP" "$FOLDER"
+          )
+          ls -la "$ZIP"
+          unzip -l "$ZIP" | head -40
+
+      - name: Upload portable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: portable-${{ matrix.os_label }}-${{ matrix.arch_label }}
+          path: dist/portable/*.zip
+          if-no-files-found: error

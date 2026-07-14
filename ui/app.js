@@ -26,11 +26,11 @@ const flashProgress = document.getElementById("flashProgress");
 const connectDevice = document.getElementById("connectDevice");
 const selectImage = document.getElementById("selectImage");
 const flashImage = document.getElementById("flashImage");
-const eraseEmmc = document.getElementById("eraseEmmc");
-const secureEraseEmmc = document.getElementById("secureEraseEmmc");
+const eraseStorage = document.getElementById("eraseStorage");
+const secureEraseStorage = document.getElementById("secureEraseStorage");
 const toggleAdvanced = document.getElementById("toggleAdvanced");
 const advancedPanel = document.getElementById("advancedPanel");
-const backupEmmc = document.getElementById("backupEmmc");
+const backupStorage = document.getElementById("backupStorage");
 const calculateUsed = document.getElementById("calculateUsed");
 const cancelFlash = document.getElementById("cancelFlash");
 const selectedImage = document.getElementById("selectedImage");
@@ -47,9 +47,9 @@ const confirmCancelBtn = document.getElementById("confirmCancelBtn");
 const alertModal = document.getElementById("alertModal");
 const alertMessage = document.getElementById("alertMessage");
 const alertOkBtn = document.getElementById("alertOkBtn");
-// Tauri bridge: same camelCase method names the old Saucer UI used, mapped to
-// snake_case #[tauri::command] handlers. Missing commands reject so the UI can
-// degrade until each milestone ports them.
+// Tauri bridge: camelCase method names map to snake_case command ids.
+// Argument object keys stay camelCase — Tauri 2 defaults to camelCase IPC
+// keys (image_path → imagePath), not snake_case.
 function createTauriApi() {
     const core = window.__TAURI__ && window.__TAURI__.core;
     if (!core || !core.invoke) {
@@ -69,9 +69,9 @@ function createTauriApi() {
         "flashBootloader",
         "disconnectDevice",
         "flashImage",
-        "eraseEmmc",
-        "secureEraseEmmc",
-        "backupEmmc",
+        "eraseStorage",
+        "secureEraseStorage",
+        "backupStorage",
         "cancelFlash",
         "forceCloseWindow",
         "getStorageInfo",
@@ -86,18 +86,17 @@ function createTauriApi() {
             if (args.length === 0) {
                 return invoke(cmd);
             }
-            // Tauri expects a single object of named args; map common cases.
-            if (name === "flashImage" || name === "selectStorage") {
-                const key = name === "flashImage" ? "imagePath" : "storage";
-                // Commands use snake_case params in Rust.
-                const rustKey = key.replace(/[A-Z]/g, (ch) => "_" + ch.toLowerCase());
-                return invoke(cmd, { [rustKey]: args[0] });
+            if (name === "flashImage") {
+                return invoke(cmd, { imagePath: args[0] });
             }
-            if (name === "backupEmmc") {
-                return invoke(cmd, { dest_path: args[0], force: !!args[1] });
+            if (name === "selectStorage") {
+                return invoke(cmd, { storage: args[0] });
+            }
+            if (name === "backupStorage") {
+                return invoke(cmd, { destPath: args[0], force: !!args[1] });
             }
             if (name === "installDeviceAccess") {
-                return invoke(cmd, { device_name: args[0] || "" });
+                return invoke(cmd, { deviceName: args[0] || "" });
             }
             return invoke(cmd, { args });
         };
@@ -126,9 +125,24 @@ function storageLabel(storage) {
     }
 }
 
+// Tauri serializes #[serde(rename_all = "camelCase")] command results, so
+// prefer camelCase and keep snake_case as a fallback for older hosts.
+function pickField(obj, ...keys) {
+    if (!obj) {
+        return undefined;
+    }
+    for (const key of keys) {
+        if (Object.prototype.hasOwnProperty.call(obj, key) && obj[key] !== undefined && obj[key] !== null) {
+            return obj[key];
+        }
+    }
+    return undefined;
+}
+
 function selectedStorageValue() {
-    if (storageTargets && storageTargets.selected_storage) {
-        return Number(storageTargets.selected_storage);
+    const selected = pickField(storageTargets, "selectedStorage", "selected_storage");
+    if (selected) {
+        return Number(selected);
     }
     return storageSelector ? Number(storageSelector.value) : 1;
 }
@@ -163,7 +177,7 @@ function storageBytesFromInfo(info) {
     if (!info) {
         return 0;
     }
-    return Number(info.storage_bytes || info.emmc_bytes || 0);
+    return Number(pickField(info, "storageBytes", "storage_bytes", "emmcBytes", "emmc_bytes") || 0);
 }
 
 function formatGiB(bytes) {
@@ -203,18 +217,31 @@ function renderStorageInfoLine() {
     storageInfo.title = titleParts.join("  ·  ");
 }
 
+function storageTargetAvailable(targets, storage) {
+    switch (Number(storage)) {
+    case 1:
+        return !!(pickField(targets, "emmcAvailable", "emmc_available"));
+    case 2:
+        return !!(pickField(targets, "sdAvailable", "sd_available"));
+    case 9:
+        return !!(pickField(targets, "spinorAvailable", "spinor_available"));
+    default:
+        return false;
+    }
+}
+
 function availableStorageEntries(targets) {
     if (!targets || !targets.success) {
         return [];
     }
     const entries = [];
-    if (targets.emmc_available) {
+    if (storageTargetAvailable(targets, 1)) {
         entries.push({ value: 1, label: "eMMC" });
     }
-    if (targets.sd_available) {
+    if (storageTargetAvailable(targets, 2)) {
         entries.push({ value: 2, label: "SD card" });
     }
-    if (targets.spinor_available) {
+    if (storageTargetAvailable(targets, 9)) {
         entries.push({ value: 9, label: "SPI NOR" });
     }
     return entries;
@@ -234,9 +261,8 @@ function renderStorageSelector() {
         option.title = available ? "" : "not detected";
     }
 
-    const selected = storageTargets && storageTargets.selected_storage
-        ? String(storageTargets.selected_storage)
-        : storageSelector.value;
+    const selectedRaw = pickField(storageTargets, "selectedStorage", "selected_storage");
+    const selected = selectedRaw ? String(selectedRaw) : storageSelector.value;
     if (enabledValues.has(selected)) {
         storageSelector.value = selected;
     }
@@ -340,10 +366,11 @@ function render() {
     const socSuffix = (lastSoc && (connected || detected)) ? " (" + lastSoc + ")" : "";
     statusText.textContent = toolMissing ? "rkdeveloptool not found" : ((detected ? "detected" : lastStatus) + socSuffix);
     flashImage.disabled = flashRunning || !connected || !selectedImagePath || noStorageDevices || dependenciesMissing;
-    eraseEmmc.disabled = flashRunning || !connected || noStorageDevices || dependenciesMissing;
-    secureEraseEmmc.disabled = flashRunning || !connected || noStorageDevices || dependenciesMissing;
-    backupEmmc.disabled = flashRunning || !connected || noStorageDevices || dependenciesMissing;
-    backupEmmc.textContent = "Backup " + selectedStorageLabel();
+    flashImage.textContent = "Flash " + selectedStorageLabel();
+    eraseStorage.disabled = flashRunning || !connected || noStorageDevices || dependenciesMissing;
+    secureEraseStorage.disabled = flashRunning || !connected || noStorageDevices || dependenciesMissing;
+    backupStorage.disabled = flashRunning || !connected || noStorageDevices || dependenciesMissing;
+    backupStorage.textContent = "Backup " + selectedStorageLabel();
     calculateUsed.disabled = flashRunning || !connected || calculatingUsedSpace || noStorageDevices || dependenciesMissing;
     connectDevice.style.display = (connected || detected) ? "inline-block" : "none";
     connectDevice.textContent = connected ? "Disconnect" : "Connect";
@@ -381,8 +408,9 @@ function render() {
     }
     if (storageSelector) {
         storageSelector.disabled = flashRunning || (lastStatus !== "connected" && !noStorageDevices);
-        if (storageTargets && storageTargets.selected_storage) {
-            storageSelector.value = String(storageTargets.selected_storage);
+        const selected = pickField(storageTargets, "selectedStorage", "selected_storage");
+        if (selected) {
+            storageSelector.value = String(selected);
         }
     }
     if (noStorageDevices && !flashRunning) {
@@ -479,7 +507,7 @@ async function refreshDriverInfo() {
             return;
         }
         if (info.kind === "windows_driver") {
-            if (!info.device_relevant) {
+            if (!pickField(info, "deviceRelevant", "device_relevant")) {
                 driverStatus.textContent = info.error || "device not found";
                 return;
             }
@@ -506,15 +534,11 @@ async function refreshStorageInfo() {
     }
     storageUsedBytes = null;
     const selectedStorage = selectedStorageValue();
-    // getStorageInfo reports whatever target is currently selected (via rfi),
-    // so a size is available for SD and SPI NOR too - not just eMMC. Only skip
-    // when the selected target isn't actually present.
-    const available = storageTargets && storageTargets.success && (
-        (selectedStorage === 1 && storageTargets.emmc_available) ||
-        (selectedStorage === 2 && storageTargets.sd_available) ||
-        (selectedStorage === 9 && storageTargets.spinor_available)
-    );
-    if (!available) {
+    // getStorageInfo reports whatever target is currently selected (via rfi).
+    // SD capacity is not reliable from the loader — always show "unknown".
+    const available = storageTargets && storageTargets.success
+        && storageTargetAvailable(storageTargets, selectedStorage);
+    if (!available || selectedStorage === 2) {
         storageTotalBytes = null;
         renderStorageInfoLine();
         return;
@@ -679,7 +703,7 @@ selectImage.addEventListener("click", async () => {
         flashStatus.textContent = result.error || "file picker canceled";
         return;
     }
-    applyImageSelection(result.path, result.size_bytes);
+    applyImageSelection(result.path, pickField(result, "sizeBytes", "size_bytes") || 0);
 });
 
 // Native host (where supported) delivers OS file drops of a single .img here.
@@ -690,13 +714,33 @@ window.onImageFileDropped = (result) => {
     if (flashRunning) {
         return;
     }
-    applyImageSelection(result.path, result.size_bytes);
+    applyImageSelection(result.path, pickField(result, "sizeBytes", "size_bytes") || 0);
 };
 
 // Anything the native drop overlay doesn't claim must not fall through to
 // the webview's default behavior (navigating to the dropped file).
 window.addEventListener("dragover", (event) => event.preventDefault());
 window.addEventListener("drop", (event) => event.preventDefault());
+
+async function startBackgroundOp(label, invokeStart) {
+    setFlashRunning(true);
+    flashProgress.value = 0;
+    try {
+        const result = await invokeStart();
+        if (!result || !result.started) {
+            setFlashRunning(false);
+            flashStatus.textContent = "";
+            showError((result && result.error) || (label + " failed"));
+            return false;
+        }
+        return true;
+    } catch (error) {
+        setFlashRunning(false);
+        flashStatus.textContent = "";
+        showError((error && error.message) || String(error) || (label + " failed"));
+        return false;
+    }
+}
 
 flashImage.addEventListener("click", async () => {
     if (!api || !api.flashImage) {
@@ -708,16 +752,9 @@ flashImage.addEventListener("click", async () => {
     }
     currentOperation = "image";
     currentOperationStorageLabel = selectedStorageLabel();
-    setFlashRunning(true);
-    flashProgress.value = 0;
     startFlashAnimation("Flashing " + basename(selectedImagePath));
     flashStatus.title = selectedImagePath;
-    const result = await api.flashImage(selectedImagePath);
-    if (!result.started) {
-        setFlashRunning(false);
-        flashStatus.textContent = "";
-        showError(result.error || "flash failed");
-    }
+    await startBackgroundOp("flash", () => api.flashImage(selectedImagePath));
 });
 
 connectDevice.addEventListener("click", async () => {
@@ -731,21 +768,15 @@ connectDevice.addEventListener("click", async () => {
     }
     currentOperation = disconnecting ? "disconnect" : "connect";
     currentOperationStorageLabel = selectedStorageLabel();
-    setFlashRunning(true);
-    flashProgress.value = 0;
     startFlashAnimation(disconnecting ? "Disconnecting" : "Connecting");
-    const result = disconnecting
-        ? await api.disconnectDevice()
-        : await api.flashBootloader();
-    if (!result.started) {
-        setFlashRunning(false);
-        flashStatus.textContent = "";
-        showError(result.error || (disconnecting ? "disconnect failed" : "connect failed"));
-    }
+    await startBackgroundOp(
+        disconnecting ? "disconnect" : "connect",
+        () => (disconnecting ? api.disconnectDevice() : api.flashBootloader())
+    );
 });
 
-eraseEmmc.addEventListener("click", async () => {
-    if (!api || !api.eraseEmmc) {
+eraseStorage.addEventListener("click", async () => {
+    if (!api || !api.eraseStorage) {
         showError("erase unavailable");
         return;
     }
@@ -763,19 +794,12 @@ eraseEmmc.addEventListener("click", async () => {
     }
     currentOperation = "erase";
     currentOperationStorageLabel = label;
-    setFlashRunning(true);
-    flashProgress.value = 0;
     startFlashAnimation("Erasing " + label);
-    const result = await api.eraseEmmc();
-    if (!result.started) {
-        setFlashRunning(false);
-        flashStatus.textContent = "";
-        showError(result.error || "erase failed");
-    }
+    await startBackgroundOp("erase", () => api.eraseStorage());
 });
 
-secureEraseEmmc.addEventListener("click", async () => {
-    if (!api || !api.secureEraseEmmc) {
+secureEraseStorage.addEventListener("click", async () => {
+    if (!api || !api.secureEraseStorage) {
         showError("secure erase unavailable");
         return;
     }
@@ -794,37 +818,42 @@ secureEraseEmmc.addEventListener("click", async () => {
     }
     currentOperation = "secure_erase";
     currentOperationStorageLabel = label;
-    setFlashRunning(true);
-    flashProgress.value = 0;
     startFlashAnimation("Secure erasing " + label);
-    const result = await api.secureEraseEmmc();
-    if (!result.started) {
-        setFlashRunning(false);
-        flashStatus.textContent = "";
-        showError(result.error || "secure erase failed");
-    }
+    await startBackgroundOp("secure erase", () => api.secureEraseStorage());
 });
 
-backupEmmc.addEventListener("click", async () => {
-    if (!api || !api.selectBackupDestination || !api.backupEmmc) {
+backupStorage.addEventListener("click", async () => {
+    if (!api || !api.selectBackupDestination || !api.backupStorage) {
         showError("backup unavailable");
         return;
     }
     if (flashRunning) {
         return;
     }
-    const picked = await api.selectBackupDestination();
+    let picked;
+    try {
+        picked = await api.selectBackupDestination();
+    } catch (error) {
+        showError((error && error.message) || String(error) || "backup destination failed");
+        return;
+    }
     if (!picked.success) {
         return;
     }
 
-    let result = await api.backupEmmc(picked.path, false);
-    if (!result.started && result.needs_confirmation) {
-        const confirmed = await showConfirm(result.message);
-        if (!confirmed) {
-            return;
+    let result;
+    try {
+        result = await api.backupStorage(picked.path, false);
+        if (!result.started && pickField(result, "needsConfirmation", "needs_confirmation")) {
+            const confirmed = await showConfirm(result.message);
+            if (!confirmed) {
+                return;
+            }
+            result = await api.backupStorage(picked.path, true);
         }
-        result = await api.backupEmmc(picked.path, true);
+    } catch (error) {
+        showError((error && error.message) || String(error) || "backup failed");
+        return;
     }
 
     if (!result.started) {
@@ -860,7 +889,7 @@ calculateUsed.addEventListener("click", async () => {
         render();
         return;
     }
-    storageUsedBytes = Number(result.used_bytes || 0);
+    storageUsedBytes = Number(pickField(result, "usedBytes", "used_bytes") || 0);
     renderStorageInfoLine();
     render();
 });
@@ -871,8 +900,9 @@ if (storageSelector) {
             return;
         }
         const nextStorage = Number(storageSelector.value);
-        const previousStorage = storageTargets && storageTargets.selected_storage
-            ? String(storageTargets.selected_storage)
+        const previousSelected = pickField(storageTargets, "selectedStorage", "selected_storage");
+        const previousStorage = previousSelected
+            ? String(previousSelected)
             : storageSelector.value;
         const result = await api.selectStorage(nextStorage);
         if (!result.started) {
@@ -881,6 +911,7 @@ if (storageSelector) {
             return;
         }
         if (storageTargets) {
+            storageTargets.selectedStorage = nextStorage;
             storageTargets.selected_storage = nextStorage;
         }
         calculatingUsedSpace = false;
@@ -894,12 +925,24 @@ cancelFlash.addEventListener("click", async () => {
         return;
     }
     const confirmed = await showConfirm(
-        "Canceling now will leave the operation incomplete and will likely invalidate the currently flashed OS. Continue?"
+        "Canceling now will leave the current operation incomplete and may leave the device in an unusable state. Continue?"
     );
     if (!confirmed) {
         return;
     }
-    await api.cancelFlash();
+    try {
+        const result = await api.cancelFlash();
+        // Host should fire onFlashComplete; if cancel couldn't attach to a task
+        // and also failed to unlock, clear the UI so Cancel is never a dead end.
+        if (result && result.started === false && flashRunning) {
+            setFlashRunning(false);
+            flashStatus.textContent = "Cancel failed";
+            showError(result.error || "no flash in progress");
+        }
+    } catch (error) {
+        setFlashRunning(false);
+        showError((error && error.message) || String(error) || "cancel failed");
+    }
 });
 
 async function initDriverInstallUi() {
@@ -968,7 +1011,7 @@ window.onFlashComplete = async (result) => {
         : operation === "connect" ? "Connect"
         : operation === "disconnect" ? "Disconnect"
         : operation === "backup" ? "Backup " + storageLbl
-        : "Flash Image";
+        : "Flash " + storageLbl;
 
     if (result && result.cancelled) {
         flashProgress.value = 0;
@@ -1003,7 +1046,7 @@ window.onFlashComplete = async (result) => {
         await showAlert("Backup " + storageLbl + " completed successfully.");
     } else {
         flashStatus.textContent = "Flash completed";
-        await showAlert("Flash Image completed successfully.");
+        await showAlert("Flash " + storageLbl + " completed successfully.");
     }
     if (operation !== "disconnect" && lastStatus === "connected") {
         scheduleStorageRefresh();
@@ -1020,7 +1063,7 @@ window.updateFlashProgress = (percent) => {
 window.onQuitDuringOperation = async () => {
     // The native window won't actually close on its own while a flash/erase/
     // backup is running (see window::event::close on the C++ side) - closing
-    // mid-operation can leave the eMMC half-written or the device stuck
+    // mid-operation can leave the storage half-written or the device stuck
     // needing a reflash. Ask first; forceCloseWindow only fires if the user
     // confirms, and re-closing at that point is allowed through.
     if (quitPromptShowing) {

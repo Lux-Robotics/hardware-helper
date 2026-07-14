@@ -9,45 +9,118 @@ a separate C++ binary** that the app spawns (same product model as before).
 ## Layout
 
 ```
-apps/imager-tauri/     # Tauri app (Rust backend + web UI)
-tools/rkdeveloptool/   # How to obtain/build the C++ companion CLI
-packaging/             # Portable zip script + future installer assets
-loader_binaries/       # SPL loader blobs shipped with portable builds
+ui/                              # Web frontend (HTML/JS/CSS)
+src-tauri/                       # Tauri/Rust package
+packaging/                       # Portable zip script + future installer assets
+loader_binaries/                 # SPL loader blobs for portable builds
+dependencies/rkdeveloptool/      # Git submodule: Lux-Robotics/rkdeveloptool (C++ CLI source)
 ```
 
-## Develop
+Clone with submodules:
 
 ```bash
-# Prerequisites: Rust stable, cargo-tauri (v2), platform webview deps
+git clone --recurse-submodules <this-repo-url>
+# or after a normal clone:
+git submodule update --init --recursive
+```
+
+Run `cargo tauri` from the **repo root** (it discovers `src-tauri/tauri.conf.json`).
+Or `cd src-tauri && cargo tauri dev` (the Tauri package directory).
+
+Build the companion from the submodule, then stage the binary next to the app (see below).
+## Port status
+
+| Area | Status (macOS arm64 / Linux x64) |
+|------|----------------------------------|
+| Shell (window, dialogs, single-instance, logs) | Done |
+| `rkdeveloptool` spawn + progress | Done (external C++ binary) |
+| USB hotplug (libusb/`rusb`) | Done on Unix |
+| Connect / flash / erase / backup / storage | Done (behavioural port) |
+| Linux udev install | Done |
+| Windows USB + libwdi driver install | Not yet |
+
+## Develop on macOS arm64
+
+```bash
+# Tools
+xcode-select --install   # if needed
+brew install libusb
+rustup update stable
 cargo install tauri-cli --version "^2" --locked
 
-cd apps/imager-tauri
-cargo tauri dev --manifest-path src-tauri/Cargo.toml
+cd /Users/antho/Desktop/hardware-helper
+
+# Dev window (rebuilds Rust on change)
+cargo tauri dev
 ```
 
-## Portable package (primary distribution for now)
+### Put `rkdeveloptool` where the app finds it
 
 ```bash
-cd apps/imager-tauri
-cargo tauri build --manifest-path src-tauri/Cargo.toml --no-bundle
+# After a release-style build:
+cargo tauri build --no-bundle
 
-# Build or download rkdeveloptool separately, then:
-RKDEV_BIN=/path/to/rkdeveloptool ./packaging/package-portable.sh
+# Staging folder for a quick test (portable layout)
+STAGE=dist/dev-run
+mkdir -p "$STAGE/loader_binaries"
+cp src-tauri/target/release/rockchip-universal-imager "$STAGE/"
+cp /path/to/rkdeveloptool "$STAGE/rkdeveloptool"
+chmod +x "$STAGE/rkdeveloptool"
+cp -R loader_binaries/* "$STAGE/loader_binaries/" 2>/dev/null || true
+: > "$STAGE/portable"
+cd "$STAGE" && ./rockchip-universal-imager
 ```
 
-Zip contents:
+During `cargo tauri dev`, the binary lives under `src-tauri/target/debug/`. Place
+`rkdeveloptool` **next to that binary**:
+
+```bash
+cp /path/to/rkdeveloptool src-tauri/target/debug/rkdeveloptool
+chmod +x src-tauri/target/debug/rkdeveloptool
+```
+
+### Linux x64
+
+System packages (Debian/Ubuntu-style): `libwebkit2gtk-4.1-dev`, `libusb-1.0-0-dev`,
+build-essential, etc. Same `cargo tauri dev` from the repo root.
+
+## Packaging layout
+
+Both **portable** and **installer** products use the same folder shape the app
+already resolves (`paths.rs`): two executables side by side plus loaders.
 
 ```
-rockchip-universal-imager[.exe]
-rkdeveloptool[.exe]    # separate program; still usable from a terminal
-portable               # empty marker → logs next to the extract folder
-loader_binaries/       # optional
+rockchip-universal-imager…/
+  rockchip-universal-imager[.exe]
+  rkdeveloptool[.exe]
+  loader_binaries/
+  portable          # portable zip only (empty marker file)
+  README.txt        # installer payload only
 ```
 
-Installers (NSIS/DMG/DEB) can be added later; they are intentionally off by default.
+Packaging is defined **only in GitHub Actions** (no `packaging/*.sh` scripts):
 
-## Docs
+| Workflow | Artifact |
+|----------|----------|
+| `.github/workflows/portable.yml` | zip + `portable` marker |
+| `.github/workflows/installer.yml` | install-layout zip (no marker) |
 
-- `apps/imager-tauri/README.md` — Tauri build system, CI notes, design choices
-- `tools/rkdeveloptool/README.md` — companion CLI
-- `PORT_TAURI.md` — port overview
+Each job (macOS aarch64 / Linux x86_64 / Windows x86_64):
+
+1. Build `rkdeveloptool` (autotools; MinGW via MSYS2 on Windows)
+2. `cargo tauri build --no-bundle`
+3. Stage folder + zip (inline in the workflow)
+4. Upload artifact
+
+Local equivalent (any OS with bash, for debugging):
+
+```bash
+# C++ companion (Unix example)
+cd dependencies/rkdeveloptool && ./autogen.sh && ./configure && make
+# Tauri app
+cargo tauri build --no-bundle
+# Then copy both binaries + loader_binaries/ into a folder and zip
+```
+
+Native wrappers (NSIS / DMG / deb) can wrap the installer payload later;
+stubs live under `packaging/{windows,macos,linux}/`.

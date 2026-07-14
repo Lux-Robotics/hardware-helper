@@ -9,7 +9,7 @@ body {
     justify-content: center;
 }
 
-/* Buttons like Erase eMMC set a strong inline background (red) to signal
+/* Buttons like Quick Erase set a strong inline background (red) to signal
    danger; that inline color otherwise wins over the browser's default
    disabled dimming, so a disabled button can still look fully clickable.
    Force a clear greyed-out look regardless of inline styling. */

@@ -1,8 +1,19 @@
-# Windows packaging assets
+# Windows installer wrappers (future)
 
-Runtime packaging for Windows is driven by CPack in the top-level `CMakeLists.txt`
-(NSIS installer and ZIP portable). WebView2 Evergreen remains an external
-dependency and is not bundled.
+CI currently ships an **install-layout zip** built by `package-installer.sh`:
 
-Place future Windows-only packaging inputs here (icons, license RTF, NSIS
-snippets) so they stay with the other platform assets under `packaging/`.
+```
+rockchip-universal-imager-windows-x86_64/
+  rockchip-universal-imager.exe
+  rkdeveloptool.exe
+  libusb-1.0.dll          # when built with MinGW
+  loader_binaries/
+  README.txt
+```
+
+A real installer (NSIS or WiX MSI) should extract that folder under
+`%LocalAppData%\Programs\Rockchip Universal Imager\` (or similar) and
+create a Start Menu shortcut to `rockchip-universal-imager.exe`.
+
+Tauri’s built-in bundler (`nsis` / `msi`) can replace this once
+`externalBin` + `resources` are wired for `rkdeveloptool` and loaders.
