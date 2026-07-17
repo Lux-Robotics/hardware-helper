@@ -1,0 +1,559 @@
+# Build rkdeveloptool for six targets (own-OS + arm64 on each runner).
+#
+# Runners (self-hosted labels):
+#   ubuntu-24      → linux-x86_64,  linux-aarch64
+#   windows-11     → windows-x86_64, windows-aarch64
+#   macos-sequoia  → macos-x86_64,  macos-aarch64
+#
+# Upstream build (from rkdeveloptool Readme):
+#   ./autogen.sh && ./configure && make
+#   needs: libusb-1.0, pkg-config, autoconf/automake/libtool, C++ toolchain
+#
+# Pre-installed expectations (see packaging/*/bootstrap-build-deps.*):
+#   Linux:   build-essential, pkg-config, autoconf, automake, libtool,
+#            libusb-1.0-0-dev, libudev-dev; aarch64: gcc/g++-aarch64-linux-gnu
+#   macOS:   Xcode CLT, brew libusb pkg-config automake autoconf libtool
+#   Windows: MSYS2 C:\msys64 (MINGW64 gcc, libusb, pkg-config, autotools),
+#            llvm-mingw at C:\llvm-mingw (aarch64-w64-mingw32-*) for arm64
+#
+# libusb packaging policy:
+#   1) Prefer static link (no external libusb) when a .a is available.
+#   2) Else ship shared libusb next to the binary (Windows: libusb-1.0.dll;
+#      macOS: libusb-1.0.dylib with @loader_path; Linux: .so if not static).
+#   3) If no usable libusb for the target, build libusb-1.0 from source into
+#      a private prefix and static-link (or stage the shared build).
+#
+# Artifact per matrix cell:
+#   rkdeveloptool-<os>-<arch>/
+#     rkdeveloptool[.exe]
+#     libusb-1.0.dll | .dylib | .so*   (only if not statically linked)
+#     BUILD.txt
+
+name: Build rkdeveloptool
+
+on:
+  push:
+    branches: [main, master, "port/**", "ci/**"]
+    paths:
+      - "dependencies/rkdeveloptool/**"
+      - ".github/workflows/build-rkdeveloptool.yaml"
+      - "packaging/**/bootstrap-build-deps.*"
+  pull_request:
+    paths:
+      - "dependencies/rkdeveloptool/**"
+      - ".github/workflows/build-rkdeveloptool.yaml"
+  workflow_dispatch:
+
+concurrency:
+  group: build-rkdeveloptool-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Upstream libusb release used only when the runner has no usable target libusb.
+  LIBUSB_VERSION: "1.0.27"
+  LIBUSB_TARBALL_URL: "https://github.com/libusb/libusb/releases/download/v1.0.27/libusb-1.0.27.tar.bz2"
+
+jobs:
+  build:
+    name: rkdeveloptool (${{ matrix.os_label }}-${{ matrix.arch_label }})
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # --- ubuntu-24: Linux only ---
+          - runner: ubuntu-24
+            os_label: linux
+            arch_label: x86_64
+            host_triple: x86_64-linux-gnu
+            cross: false
+          - runner: ubuntu-24
+            os_label: linux
+            arch_label: aarch64
+            host_triple: aarch64-linux-gnu
+            cross: true
+
+          # --- windows-11: Windows only ---
+          - runner: windows-11
+            os_label: windows
+            arch_label: x86_64
+            host_triple: x86_64-w64-mingw32
+            cross: false
+          - runner: windows-11
+            os_label: windows
+            arch_label: aarch64
+            host_triple: aarch64-w64-mingw32
+            cross: true
+
+          # --- macos-sequoia: macOS only ---
+          - runner: macos-sequoia
+            os_label: macos
+            arch_label: x86_64
+            host_triple: x86_64-apple-darwin
+            cross: true
+          - runner: macos-sequoia
+            os_label: macos
+            arch_label: aarch64
+            host_triple: aarch64-apple-darwin
+            cross: false
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Build rkdeveloptool + stage artifacts
+        env:
+          OS_LABEL: ${{ matrix.os_label }}
+          ARCH_LABEL: ${{ matrix.arch_label }}
+          HOST_TRIPLE: ${{ matrix.host_triple }}
+          CROSS: ${{ matrix.cross }}
+          LIBUSB_VERSION: ${{ env.LIBUSB_VERSION }}
+          LIBUSB_TARBALL_URL: ${{ env.LIBUSB_TARBALL_URL }}
+        run: |
+          set -euo pipefail
+
+          WS="${{ github.workspace }}"
+          UPSTREAM="${WS}/dependencies/rkdeveloptool"
+          # Private source tree per matrix cell (self-hosted runners may run jobs in parallel).
+          SRC="${WS}/build/src-rkdeveloptool-${OS_LABEL}-${ARCH_LABEL}"
+          BUILD="${WS}/build/rkdeveloptool-${OS_LABEL}-${ARCH_LABEL}"
+          PREFIX="${WS}/build/prefix-${OS_LABEL}-${ARCH_LABEL}"
+          STAGE="${WS}/dist/rkdeveloptool-${OS_LABEL}-${ARCH_LABEL}"
+          LIBUSB_SRC="${WS}/build/libusb-src-${OS_LABEL}-${ARCH_LABEL}"
+          LIBUSB_PREFIX="${WS}/build/libusb-prefix-${OS_LABEL}-${ARCH_LABEL}"
+
+          test -d "$UPSTREAM"
+          rm -rf "$SRC" "$BUILD" "$PREFIX" "$STAGE"
+          mkdir -p "$(dirname "$SRC")" "$BUILD" "$PREFIX" "$STAGE"
+          cp -a "$UPSTREAM" "$SRC"
+
+          # ------------------------------------------------------------------
+          # Toolchain / PATH (Windows MSYS2 + optional llvm-mingw)
+          # ------------------------------------------------------------------
+          setup_env() {
+            case "$OS_LABEL" in
+              windows)
+                export PATH="/c/msys64/mingw64/bin:/c/msys64/usr/bin:/mingw64/bin:${PATH:-}"
+                for d in /c/llvm-mingw/bin "/c/Program Files/llvm-mingw/bin" /llvm-mingw/bin; do
+                  if [[ -d "$d" ]]; then
+                    export PATH="$d:$PATH"
+                    break
+                  fi
+                done
+                # Prefer MSYS2 usr tools for autogen
+                export ACLOCAL_PATH="${ACLOCAL_PATH:-/mingw64/share/aclocal:/usr/share/aclocal}"
+                ;;
+              macos)
+                if [[ -x /opt/homebrew/bin/brew ]]; then
+                  eval "$(/opt/homebrew/bin/brew shellenv)"
+                elif [[ -x /usr/local/bin/brew ]]; then
+                  eval "$(/usr/local/bin/brew shellenv)"
+                fi
+                ;;
+              linux)
+                :
+                ;;
+            esac
+          }
+
+          setup_env
+
+          need() {
+            if ! command -v "$1" >/dev/null 2>&1; then
+              echo "ERROR: required tool not found: $1" >&2
+              exit 1
+            fi
+          }
+
+          need bash
+          need make
+          need pkg-config || need pkgconf
+
+          # ------------------------------------------------------------------
+          # Select CC/CXX for target
+          # ------------------------------------------------------------------
+          select_compiler() {
+            unset CC CXX AR RANLIB STRIP CONFIGURE_HOST ARCH_CFLAGS ARCH_LDFLAGS || true
+            case "$OS_LABEL-$ARCH_LABEL" in
+              linux-x86_64)
+                export CC="${CC:-gcc}"
+                export CXX="${CXX:-g++}"
+                ;;
+              linux-aarch64)
+                export CC="${CC:-aarch64-linux-gnu-gcc}"
+                export CXX="${CXX:-aarch64-linux-gnu-g++}"
+                CONFIGURE_HOST="--host=aarch64-linux-gnu"
+                ;;
+              windows-x86_64)
+                export CC="${CC:-x86_64-w64-mingw32-gcc}"
+                export CXX="${CXX:-x86_64-w64-mingw32-g++}"
+                # MSYS2 MinGW64 often exposes plain gcc when PATH has /mingw64/bin first
+                if ! command -v "$CC" >/dev/null 2>&1; then
+                  export CC=gcc
+                  export CXX=g++
+                fi
+                CONFIGURE_HOST="--host=x86_64-w64-mingw32"
+                ;;
+              windows-aarch64)
+                export CC="${CC:-aarch64-w64-mingw32-gcc}"
+                export CXX="${CXX:-aarch64-w64-mingw32-g++}"
+                CONFIGURE_HOST="--host=aarch64-w64-mingw32"
+                ;;
+              macos-x86_64)
+                export CC="${CC:-clang}"
+                export CXX="${CXX:-clang++}"
+                ARCH_CFLAGS="-arch x86_64"
+                ARCH_LDFLAGS="-arch x86_64"
+                export CFLAGS="${CFLAGS:-} ${ARCH_CFLAGS}"
+                export CXXFLAGS="${CXXFLAGS:-} ${ARCH_CFLAGS}"
+                export LDFLAGS="${LDFLAGS:-} ${ARCH_LDFLAGS}"
+                ;;
+              macos-aarch64)
+                export CC="${CC:-clang}"
+                export CXX="${CXX:-clang++}"
+                ARCH_CFLAGS="-arch arm64"
+                ARCH_LDFLAGS="-arch arm64"
+                export CFLAGS="${CFLAGS:-} ${ARCH_CFLAGS}"
+                export CXXFLAGS="${CXXFLAGS:-} ${ARCH_CFLAGS}"
+                export LDFLAGS="${LDFLAGS:-} ${ARCH_LDFLAGS}"
+                ;;
+              *)
+                echo "Unknown OS/arch: $OS_LABEL-$ARCH_LABEL" >&2
+                exit 1
+                ;;
+            esac
+            need "$CC"
+            need "$CXX"
+            echo "Using CC=$CC CXX=$CXX ${CONFIGURE_HOST:-}"
+          }
+
+          select_compiler
+
+          # ------------------------------------------------------------------
+          # libusb: find existing or build from source
+          # ------------------------------------------------------------------
+          # Sets:
+          #   LIBUSB_MODE = static | shared
+          #   PKG_CONFIG_PATH / LIBUSB1_CFLAGS / LIBUSB1_LIBS as needed
+          #   LIBUSB_STAGE_FILES = paths to copy next to the binary (if shared)
+          resolve_libusb() {
+            LIBUSB_MODE=""
+            LIBUSB_STAGE_FILES=()
+            export PKG_CONFIG_PATH="${PKG_CONFIG_PATH:-}"
+
+            # Helper: try pkg-config for libusb-1.0
+            try_pkg_static() {
+              if pkg-config --exists libusb-1.0 2>/dev/null; then
+                local static_libs
+                static_libs="$(pkg-config --static --libs libusb-1.0 2>/dev/null || true)"
+                local cflags
+                cflags="$(pkg-config --cflags libusb-1.0 2>/dev/null || true)"
+                # Prefer forcing .a when we can locate it
+                local libdir
+                libdir="$(pkg-config --variable=libdir libusb-1.0 2>/dev/null || true)"
+                if [[ -n "$libdir" && -f "$libdir/libusb-1.0.a" ]]; then
+                  LIBUSB_MODE=static
+                  export LIBUSB1_CFLAGS="$cflags"
+                  # Link archive + static deps (frameworks on macOS, etc.)
+                  case "$OS_LABEL" in
+                    macos)
+                      export LIBUSB1_LIBS="$libdir/libusb-1.0.a -lobjc -framework IOKit -framework CoreFoundation -framework Security"
+                      ;;
+                    windows)
+                      export LIBUSB1_LIBS="$libdir/libusb-1.0.a -lsetupapi -lole32 -ladvapi32"
+                      ;;
+                    linux)
+                      export LIBUSB1_LIBS="$libdir/libusb-1.0.a $(pkg-config --libs --static libudev 2>/dev/null || echo -ludev) -lpthread"
+                      ;;
+                  esac
+                  echo "libusb: static archive at $libdir/libusb-1.0.a"
+                  return 0
+                fi
+                if [[ -n "$static_libs" ]]; then
+                  # May still resolve to -lusb-1.0 (shared). Treat as shared unless -Bstatic.
+                  :
+                fi
+              fi
+              return 1
+            }
+
+            try_pkg_shared() {
+              if ! pkg-config --exists libusb-1.0 2>/dev/null; then
+                return 1
+              fi
+              LIBUSB_MODE=shared
+              export LIBUSB1_CFLAGS
+              export LIBUSB1_LIBS
+              LIBUSB1_CFLAGS="$(pkg-config --cflags libusb-1.0)"
+              LIBUSB1_LIBS="$(pkg-config --libs libusb-1.0)"
+              local libdir
+              libdir="$(pkg-config --variable=libdir libusb-1.0 2>/dev/null || true)"
+              case "$OS_LABEL" in
+                windows)
+                  for cand in \
+                    "$libdir/../bin/libusb-1.0.dll" \
+                    /mingw64/bin/libusb-1.0.dll \
+                    /c/msys64/mingw64/bin/libusb-1.0.dll; do
+                    if [[ -f "$cand" ]]; then
+                      LIBUSB_STAGE_FILES+=("$cand")
+                      break
+                    fi
+                  done
+                  # MinGW also often needs libwinpthread / libgcc / libstdc++ if not fully static
+                  for dll in libwinpthread-1.dll libgcc_s_seh-1.dll libstdc++-6.dll; do
+                    for root in /mingw64/bin /c/msys64/mingw64/bin; do
+                      if [[ -f "$root/$dll" ]]; then
+                        LIBUSB_STAGE_FILES+=("$root/$dll")
+                        break
+                      fi
+                    done
+                  done
+                  ;;
+                macos)
+                  if [[ -n "$libdir" ]]; then
+                    for cand in "$libdir/libusb-1.0.dylib" "$libdir/libusb-1.0.0.dylib"; do
+                      if [[ -f "$cand" ]]; then
+                        LIBUSB_STAGE_FILES+=("$cand")
+                        break
+                      fi
+                    done
+                  fi
+                  ;;
+                linux)
+                  if [[ -n "$libdir" ]]; then
+                    # Prefer the real SONAME file
+                    shopt -s nullglob
+                    for cand in "$libdir"/libusb-1.0.so*; do
+                      LIBUSB_STAGE_FILES+=("$cand")
+                    done
+                    shopt -u nullglob
+                  fi
+                  ;;
+              esac
+              echo "libusb: shared via pkg-config (stage ${#LIBUSB_STAGE_FILES[@]} file(s))"
+              return 0
+            }
+
+            # Cross Windows aarch64: system MinGW64 libusb is x86_64 — build from source.
+            # Cross Linux aarch64: try host pkg-config with PKG_CONFIG_SYSROOT or build.
+            if [[ "$OS_LABEL-$ARCH_LABEL" == "windows-aarch64" ]]; then
+              echo "libusb: building from source for windows-aarch64 (llvm-mingw)"
+              build_libusb_from_source
+              return 0
+            fi
+
+            if [[ "$OS_LABEL-$ARCH_LABEL" == "linux-aarch64" ]]; then
+              # Cross pkg-config is unreliable; build a private static libusb.
+              echo "libusb: building from source for linux-aarch64 cross"
+              build_libusb_from_source
+              return 0
+            fi
+
+            if try_pkg_static; then
+              return 0
+            fi
+            if try_pkg_shared; then
+              return 0
+            fi
+
+            echo "libusb: not found via pkg-config — building from source"
+            build_libusb_from_source
+          }
+
+          build_libusb_from_source() {
+            need curl
+            need tar
+            mkdir -p "$LIBUSB_SRC" "$LIBUSB_PREFIX"
+            local tarball="${WS}/build/libusb-${LIBUSB_VERSION}.tar.bz2"
+            if [[ ! -f "$tarball" ]]; then
+              curl -fsSL "$LIBUSB_TARBALL_URL" -o "$tarball"
+            fi
+            rm -rf "${LIBUSB_SRC:?}/"*
+            tar -xjf "$tarball" -C "$LIBUSB_SRC" --strip-components=1
+
+            local conf_args=(--prefix="$LIBUSB_PREFIX" --disable-shared --enable-static --disable-udev)
+            # Linux host builds usually want udev; for portable static on linux-x86_64 keep udev
+            if [[ "$OS_LABEL" == "linux" && "$ARCH_LABEL" == "x86_64" ]]; then
+              conf_args=(--prefix="$LIBUSB_PREFIX" --disable-shared --enable-static --enable-udev)
+            fi
+            # Cross host triple
+            if [[ -n "${CONFIGURE_HOST:-}" ]]; then
+              conf_args+=($CONFIGURE_HOST)
+            fi
+
+            (
+              cd "$LIBUSB_SRC"
+              # shellcheck disable=SC2086
+              ./configure "${conf_args[@]}" \
+                CC="$CC" CXX="$CXX" \
+                CFLAGS="${CFLAGS:-}" CXXFLAGS="${CXXFLAGS:-}" LDFLAGS="${LDFLAGS:-}"
+              make -j"$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)"
+              make install
+            )
+
+            export PKG_CONFIG_PATH="$LIBUSB_PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+            LIBUSB_MODE=static
+            export LIBUSB1_CFLAGS
+            export LIBUSB1_LIBS
+            LIBUSB1_CFLAGS="-I$LIBUSB_PREFIX/include/libusb-1.0"
+            case "$OS_LABEL" in
+              macos)
+                LIBUSB1_LIBS="$LIBUSB_PREFIX/lib/libusb-1.0.a -lobjc -framework IOKit -framework CoreFoundation -framework Security"
+                ;;
+              windows)
+                LIBUSB1_LIBS="$LIBUSB_PREFIX/lib/libusb-1.0.a -lsetupapi -lole32 -ladvapi32"
+                ;;
+              linux)
+                if [[ "$ARCH_LABEL" == "x86_64" ]]; then
+                  LIBUSB1_LIBS="$LIBUSB_PREFIX/lib/libusb-1.0.a -ludev -lpthread"
+                else
+                  # built with --disable-udev for cross simplicity
+                  LIBUSB1_LIBS="$LIBUSB_PREFIX/lib/libusb-1.0.a -lpthread"
+                fi
+                ;;
+            esac
+            echo "libusb: static from source → $LIBUSB_PREFIX"
+          }
+
+          resolve_libusb
+
+          # ------------------------------------------------------------------
+          # rkdeveloptool autotools build
+          # ------------------------------------------------------------------
+          # PKG_CHECK_MODULES requires pkg-config to find libusb-1.0. When we
+          # built a private prefix, PKG_CONFIG_PATH points at it. We still pass
+          # LIBUSB1_* on `make` so static archives win over -lusb-1.0 shared.
+          if [[ ! -x "$SRC/configure" ]]; then
+            (
+              cd "$SRC"
+              ./autogen.sh
+            )
+          fi
+
+          if ! pkg-config --exists libusb-1.0; then
+            echo "ERROR: pkg-config cannot see libusb-1.0 (PKG_CONFIG_PATH=${PKG_CONFIG_PATH:-})" >&2
+            exit 1
+          fi
+          echo "pkg-config libusb-1.0: $(pkg-config --modversion libusb-1.0)"
+          echo "  cflags: $(pkg-config --cflags libusb-1.0)"
+          echo "  libs:   $(pkg-config --libs libusb-1.0)"
+          echo "  forced LIBUSB1_LIBS=$LIBUSB1_LIBS"
+
+          (
+            cd "$BUILD"
+            # shellcheck disable=SC2086
+            "$SRC/configure" \
+              ${CONFIGURE_HOST:-} \
+              --prefix="$PREFIX" \
+              CC="$CC" \
+              CXX="$CXX" \
+              CFLAGS="${CFLAGS:-}" \
+              CXXFLAGS="${CXXFLAGS:-}" \
+              LDFLAGS="${LDFLAGS:-}"
+            # Force our resolved libusb flags (static archive preferred).
+            make -j"$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)" \
+              LIBUSB1_CFLAGS="$LIBUSB1_CFLAGS" \
+              LIBUSB1_LIBS="$LIBUSB1_LIBS"
+            make install \
+              LIBUSB1_CFLAGS="$LIBUSB1_CFLAGS" \
+              LIBUSB1_LIBS="$LIBUSB1_LIBS" || true
+          )
+
+          # Locate built binary
+          BUILT=""
+          for c in \
+            "$PREFIX/bin/rkdeveloptool.exe" \
+            "$PREFIX/bin/rkdeveloptool" \
+            "$BUILD/rkdeveloptool.exe" \
+            "$BUILD/rkdeveloptool" \
+            "$BUILD/.libs/rkdeveloptool.exe" \
+            "$BUILD/.libs/rkdeveloptool"; do
+            if [[ -f "$c" ]]; then
+              BUILT="$c"
+              break
+            fi
+          done
+          if [[ -z "$BUILT" ]]; then
+            echo "ERROR: rkdeveloptool binary not found after build" >&2
+            find "$BUILD" -type f | head -50 >&2 || true
+            exit 1
+          fi
+
+          # ------------------------------------------------------------------
+          # Stage output
+          # ------------------------------------------------------------------
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE"
+          if [[ "$OS_LABEL" == "windows" ]]; then
+            cp "$BUILT" "$STAGE/rkdeveloptool.exe"
+          else
+            cp "$BUILT" "$STAGE/rkdeveloptool"
+            chmod +x "$STAGE/rkdeveloptool"
+          fi
+
+          # Stage shared deps if not static
+          if [[ "$LIBUSB_MODE" == "shared" ]]; then
+            for f in "${LIBUSB_STAGE_FILES[@]+"${LIBUSB_STAGE_FILES[@]}"}"; do
+              [[ -f "$f" ]] || continue
+              cp -a "$f" "$STAGE/"
+            done
+            # macOS: fix dylib install name so the binary finds it beside itself
+            if [[ "$OS_LABEL" == "macos" ]]; then
+              for dylib in "$STAGE"/libusb-1.0*.dylib; do
+                [[ -f "$dylib" ]] || continue
+                base="$(basename "$dylib")"
+                install_name_tool -id "@loader_path/$base" "$dylib" || true
+                install_name_tool -change \
+                  "$(otool -L "$STAGE/rkdeveloptool" | awk '/libusb-1.0/ {print $1; exit}')" \
+                  "@loader_path/$base" \
+                  "$STAGE/rkdeveloptool" || true
+              done
+            fi
+            # Linux: rpath $ORIGIN
+            if [[ "$OS_LABEL" == "linux" ]] && command -v patchelf >/dev/null 2>&1; then
+              patchelf --set-rpath '$ORIGIN' "$STAGE/rkdeveloptool" || true
+            fi
+          fi
+
+          # Windows MinGW: always try to ship runtime DLLs next to .exe when linked shared
+          if [[ "$OS_LABEL" == "windows" && "$LIBUSB_MODE" == "shared" ]]; then
+            :
+          fi
+
+          {
+            echo "rkdeveloptool artifact"
+            echo "os=$OS_LABEL arch=$ARCH_LABEL host_triple=$HOST_TRIPLE"
+            echo "cc=$CC cxx=$CXX"
+            echo "libusb_mode=$LIBUSB_MODE"
+            echo "built_from=$BUILT"
+            echo "git_sha=${GITHUB_SHA:-unknown}"
+            date -u +"%Y-%m-%dT%H:%M:%SZ"
+            echo ""
+            echo "files:"
+            ls -la "$STAGE"
+            echo ""
+            if [[ "$OS_LABEL" == "macos" ]]; then
+              echo "otool -L:"
+              otool -L "$STAGE/rkdeveloptool" 2>/dev/null || true
+            elif [[ "$OS_LABEL" == "linux" ]]; then
+              echo "ldd / readelf:"
+              ldd "$STAGE/rkdeveloptool" 2>/dev/null || readelf -d "$STAGE/rkdeveloptool" 2>/dev/null || true
+            elif [[ "$OS_LABEL" == "windows" ]]; then
+              echo "Note: Windows PE; libusb/runtime DLLs staged when dynamically linked."
+            fi
+          } >"$STAGE/BUILD.txt"
+
+          echo "==== staged ===="
+          cat "$STAGE/BUILD.txt"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rkdeveloptool-${{ matrix.os_label }}-${{ matrix.arch_label }}
+          path: dist/rkdeveloptool-${{ matrix.os_label }}-${{ matrix.arch_label }}/
+          if-no-files-found: error
