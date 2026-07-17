@@ -105,10 +105,22 @@ Packaging is defined **only in GitHub Actions** (no `packaging/*.sh` scripts):
 | `.github/workflows/portable.yml` | zip + `portable` marker |
 | `.github/workflows/installer.yml` | install-layout zip (no marker) |
 
-Each job (macOS aarch64 / Linux x86_64 / Windows x86_64):
+**Self-hosted runners** only. System toolchains are assumed pre-installed
+(full lists live in comments at the top of each workflow). CI only installs
+Rust pieces (`rustup` targets, `tauri-cli`, Cargo crates).
 
-1. Build `rkdeveloptool` (autotools; MinGW via MSYS2 on Windows)
-2. `cargo tauri build --no-bundle`
+Each OS runner builds **that OS only**, for host arch **and** aarch64:
+
+| Runner label | Artifacts |
+|--------------|-----------|
+| `[self-hosted, Linux]` | `linux-x86_64`, `linux-aarch64` |
+| `[self-hosted, Windows]` | `windows-x86_64`, `windows-aarch64` |
+| `[self-hosted, macOS]` | `macos-x86_64`, `macos-aarch64` |
+
+Per matrix cell:
+
+1. Build `rkdeveloptool` (autotools; MinGW / llvm-mingw on Windows)
+2. `cargo tauri build --no-bundle --target <triple>`
 3. Stage folder + zip (inline in the workflow)
 4. Upload artifact
 

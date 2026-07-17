@@ -1,6 +1,28 @@
-# Windows installer wrappers (future)
+# Windows packaging
 
-CI currently ships an **install-layout zip** built by `package-installer.sh`:
+## Build-server bootstrap
+
+On the Windows CI host, **elevated PowerShell**:
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass -Force
+.\packaging\windows\bootstrap-build-deps.ps1
+# optional: -SkipTauriCli -SkipLlvmMingw -SkipVsBuildTools
+```
+
+From Git Bash / MSYS2 (still needs elevation for a full install):
+
+```bash
+bash packaging/windows/bootstrap-build-deps.sh
+```
+
+Installs Git/CMake/Ninja (winget), VS 2022 Build Tools (x64+ARM64), MSYS2
+MinGW64 + libusb, llvm-mingw (arm64 rkdeveloptool), rustup + MSVC targets,
+and `tauri-cli`.
+
+## Installer wrappers (future)
+
+CI currently ships an **install-layout zip**:
 
 ```
 rockchip-universal-imager-windows-x86_64/

@@ -1,4 +1,18 @@
-# Linux installer wrappers (future)
+# Linux packaging
+
+## Build-server bootstrap
+
+On a Debian/Ubuntu self-hosted runner (SSH):
+
+```bash
+bash packaging/linux/bootstrap-build-deps.sh
+# optional: --skip-tauri-cli  --skip-cross
+```
+
+Installs apt packages (build tools, libusb, WebKitGTK/Tauri deps), aarch64
+cross GCC, rustup + targets, and `tauri-cli`.
+
+## Installer wrappers (future)
 
 CI ships a flat install-layout zip:
 
