@@ -1,18 +1,10 @@
-# Build the Tauri app only (no rkdeveloptool compile, no zip packaging).
+# Build the Tauri app only (no rkdeveloptool compile, no packaging).
 #
-# Artifact per matrix cell:
-#   app-<os>-<arch>/
-#     rockchip-universal-imager[.exe]
-#     APP.txt
+# Artifact per matrix cell: app-<os>-<arch>/
+#   macOS:  "Rockchip Universal Imager.app"/  (+ APP.txt)
+#   others: rockchip-universal-imager[.exe]   (+ APP.txt)
 #
-# Used standalone (workflow_dispatch) or by package.yaml (workflow_call).
-#
-# Runners: each OS host builds its own OS.
-#
-# linux-aarch64 is intentionally omitted here: full Tauri/WebKitGTK cannot be
-# reliably cross-linked from x86_64 (pkg-config/linker pick host x86_64 libs).
-# Ship linux-aarch64 GUI only from a native arm64 Linux runner later.
-# rkdeveloptool still builds linux-aarch64 in build-rkdeveloptool.yaml.
+# linux-aarch64 GUI omitted (needs native arm64 Linux runner).
 
 name: Build app
 
@@ -48,7 +40,6 @@ jobs:
             arch_label: x86_64
             rust_target: x86_64-unknown-linux-gnu
             app_name: rockchip-universal-imager
-          # linux-aarch64 app: see file header (needs native arm64 runner)
           - runner: [self-hosted, Windows, X64]
             shell: C:/msys64/usr/bin/bash.exe --noprofile --norc -e {0}
             os_label: windows
@@ -87,7 +78,6 @@ jobs:
           cd "$(ci_workspace)"
           ci_setup_toolchain_path "$OS_LABEL"
 
-          # rustup/cargo live here; runner jobs often lack this on PATH.
           CARGO_BIN="${CARGO_HOME:-${HOME:-}/.cargo}/bin"
           if [[ -n "${USERPROFILE:-}" ]]; then
             CARGO_BIN_WIN="$(ci_to_unix_path "${USERPROFILE}/.cargo/bin")"
@@ -96,12 +86,10 @@ jobs:
           ci_path_prepend "$CARGO_BIN"
           # shellcheck disable=SC1091
           [[ -f "${CARGO_HOME:-$HOME/.cargo}/env" ]] && source "${CARGO_HOME:-$HOME/.cargo}/env"
-          # Windows MSYS: env file may use Windows paths; force bin dir
           export PATH="${CARGO_BIN}${CARGO_BIN_WIN:+:$CARGO_BIN_WIN}:$PATH"
           hash -r 2>/dev/null || true
 
           if ! command -v rustup >/dev/null 2>&1; then
-            echo "rustup not found; installing for $(id -un)…"
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
               | sh -s -- -y --default-toolchain stable --profile minimal
             # shellcheck disable=SC1091
@@ -112,10 +100,8 @@ jobs:
           rustup toolchain install stable --profile minimal
           rustup default stable
           rustup target add "${{ matrix.rust_target }}"
-          command -v rustc
-          command -v cargo
-          rustc -vV
-          cargo -vV
+          command -v rustc && rustc -vV
+          command -v cargo && cargo -vV
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -140,7 +126,7 @@ jobs:
           [[ -f "${CARGO_HOME:-$HOME/.cargo}/env" ]] && source "${CARGO_HOME:-$HOME/.cargo}/env"
           cargo install tauri-cli --version "^2" --locked
 
-      - name: Build Tauri app (--no-bundle)
+      - name: Build Tauri app
         env:
           OS_LABEL: ${{ matrix.os_label }}
           ARCH_LABEL: ${{ matrix.arch_label }}
@@ -172,19 +158,33 @@ jobs:
           esac
 
           if [[ "$OS_LABEL" == "windows" && ! -f src-tauri/icons/icon.ico ]]; then
-            echo "ERROR: src-tauri/icons/icon.ico missing (required for Windows tauri-build)" >&2
+            echo "ERROR: src-tauri/icons/icon.ico missing" >&2
             exit 1
           fi
 
-          cargo tauri build --no-bundle --target "$RUST_TARGET"
-
-          APP_BIN="${WS}/src-tauri/target/${RUST_TARGET}/release/${APP_NAME}"
-          test -f "$APP_BIN"
           OUT="${WS}/dist/app-${OS_LABEL}-${ARCH_LABEL}"
           rm -rf "$OUT"
           mkdir -p "$OUT"
-          cp "$APP_BIN" "$OUT/$APP_NAME"
-          chmod +x "$OUT/$APP_NAME" 2>/dev/null || true
+
+          if [[ "$OS_LABEL" == "macos" ]]; then
+            # Produce a real .app bundle
+            cargo tauri build --target "$RUST_TARGET" --bundles app
+            BUNDLE_DIR="${WS}/src-tauri/target/${RUST_TARGET}/release/bundle/macos"
+            APP_PATH="$(find "$BUNDLE_DIR" -maxdepth 1 -type d -name '*.app' | head -1)"
+            test -n "$APP_PATH" && test -d "$APP_PATH"
+            cp -R "$APP_PATH" "$OUT/"
+            # Normalize name
+            if [[ "$(basename "$APP_PATH")" != "Rockchip Universal Imager.app" ]]; then
+              mv "$OUT/$(basename "$APP_PATH")" "$OUT/Rockchip Universal Imager.app"
+            fi
+          else
+            cargo tauri build --no-bundle --target "$RUST_TARGET"
+            APP_BIN="${WS}/src-tauri/target/${RUST_TARGET}/release/${APP_NAME}"
+            test -f "$APP_BIN"
+            cp "$APP_BIN" "$OUT/$APP_NAME"
+            chmod +x "$OUT/$APP_NAME" 2>/dev/null || true
+          fi
+
           {
             echo "app artifact"
             echo "os=$OS_LABEL arch=$ARCH_LABEL target=$RUST_TARGET"

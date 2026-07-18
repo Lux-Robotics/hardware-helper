@@ -116,6 +116,8 @@ if (-not $SkipWingetTools) {
         Invoke-WingetInstall "Kitware.CMake" "CMake" | Out-Null
         Invoke-WingetInstall "Ninja-build.Ninja" "Ninja" | Out-Null
         Invoke-WingetInstall "7zip.7zip" "7-Zip" | Out-Null
+        # NSIS for package.yaml Windows installers (makensis)
+        Invoke-WingetInstall "NSIS.NSIS" "NSIS" | Out-Null
     } else {
         Write-Warning "winget missing. Install App Installer from Microsoft Store, or install Git/CMake/Ninja manually."
     }

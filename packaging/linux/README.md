@@ -15,18 +15,9 @@ cross GCC, rustup + targets, and `tauri-cli`.
 Shared CI path helpers (used by GitHub Actions bash steps on all OSes):
 `packaging/ci/ci-env.sh`.
 
-## Installer wrappers (future)
+## Packaging
 
-CI ships a flat install-layout zip:
+- **Portable zip:** app + `rkdeveloptool` + `loader_binaries/`
+- **Installer:** `.deb` → `/opt/rockchip-universal-imager/` + `.desktop` entry
 
-```
-rockchip-universal-imager-linux-x86_64/
-  rockchip-universal-imager
-  rkdeveloptool
-  loader_binaries/
-  README.txt
-```
-
-Optional later: `.deb` / AppImage / `.desktop` that installs that folder under
-`/opt/rockchip-universal-imager/` and ships `99-rk-rockusb.rules` from the
-rkdeveloptool submodule.
+`linux-aarch64` GUI is not built on x86_64 hosts yet; companion tool still is.

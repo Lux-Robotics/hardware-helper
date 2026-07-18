@@ -104,6 +104,8 @@ install_apt_packages() {
     bzip2
     zip
     unzip
+    # .deb packaging (package.yaml installer)
+    dpkg-dev
     # USB / crypto for app + rkdeveloptool
     libusb-1.0-0-dev
     libudev-dev

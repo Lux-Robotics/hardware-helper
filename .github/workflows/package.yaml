@@ -1,21 +1,19 @@
-# Full distribution pipeline (common CI pattern: compile once → package).
+# Full distribution pipeline: compile companions + app, then package per OS/arch.
 #
 #   package.yaml
-#     ├─ build-rkdeveloptool  (reusable) → rkdeveloptool-<os>-<arch>
-#     ├─ build-app            (reusable) → app-<os>-<arch>
-#     └─ package              (Linux)    → portable + installer zips for all cells
+#     ├─ build-rkdeveloptool → rkdeveloptool-<os>-<arch>
+#     ├─ build-app           → app-<os>-<arch>  (.app on macOS)
+#     └─ package matrix (5 cells) → per-cell portable zip + real installer
 #
-# Product layouts (same binary folder; packaging only differs by marker/README):
+# Portable (one zip per OS/arch): app + rkdeveloptool + loader_binaries only
+#   (no portable marker, no README)
 #
-#   Portable zip  — folder with both apps + loader_binaries + empty `portable` file
-#                   (run from that folder; no system install)
-#   Installer zip — same two apps + loader_binaries + README (payload for a future
-#                   NSIS/DMG/deb that copies the folder into OS program dirs)
+# Installer (one file per OS/arch):
+#   Windows → NSIS setup.exe
+#   macOS   → DMG (drag .app to Applications; companions beside .app)
+#   Linux   → .deb under /opt/rockchip-universal-imager
 #
-# Logs: always OS user/system log dirs (not next to the portable/install folder).
-#   See src-tauri/src/logging.rs
-#
-# You can still run Build rkdeveloptool / Build app alone for faster iteration.
+# Logs always use OS user log dirs (see src-tauri/src/logging.rs).
 
 name: Package
 
@@ -40,49 +38,91 @@ jobs:
     uses: ./.github/workflows/build-app.yaml
 
   package:
-    name: Assemble portable + installer
+    name: package (${{ matrix.os_label }}-${{ matrix.arch_label }})
     needs: [companions, apps]
-    # Assembly only (zip); binaries already match each OS/arch.
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: [self-hosted, Linux, X64]
+            shell: bash
+            os_label: linux
+            arch_label: x86_64
+            app_name: rockchip-universal-imager
+            rk_name: rkdeveloptool
+          - runner: [self-hosted, Windows, X64]
+            shell: C:/msys64/usr/bin/bash.exe --noprofile --norc -e {0}
+            os_label: windows
+            arch_label: x86_64
+            app_name: rockchip-universal-imager.exe
+            rk_name: rkdeveloptool.exe
+          - runner: [self-hosted, Windows, X64]
+            shell: C:/msys64/usr/bin/bash.exe --noprofile --norc -e {0}
+            os_label: windows
+            arch_label: aarch64
+            app_name: rockchip-universal-imager.exe
+            rk_name: rkdeveloptool.exe
+          - runner: [self-hosted, macOS, X64]
+            shell: bash
+            os_label: macos
+            arch_label: x86_64
+            app_name: rockchip-universal-imager
+            rk_name: rkdeveloptool
+          - runner: [self-hosted, macOS, X64]
+            shell: bash
+            os_label: macos
+            arch_label: aarch64
+            app_name: rockchip-universal-imager
+            rk_name: rkdeveloptool
+
     steps:
-      - name: Checkout (loader_binaries)
+      - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Download all rkdeveloptool artifacts
+      - name: Download rkdeveloptool artifact
         uses: actions/download-artifact@v4
         with:
-          pattern: rkdeveloptool-*
-          path: dist/in
-          merge-multiple: false
+          name: rkdeveloptool-${{ matrix.os_label }}-${{ matrix.arch_label }}
+          path: dist/in/rkdeveloptool-${{ matrix.os_label }}-${{ matrix.arch_label }}
 
-      - name: Download all app artifacts
+      - name: Download app artifact
         uses: actions/download-artifact@v4
         with:
-          pattern: app-*
-          path: dist/in
-          merge-multiple: false
+          name: app-${{ matrix.os_label }}-${{ matrix.arch_label }}
+          path: dist/in/app-${{ matrix.os_label }}-${{ matrix.arch_label }}
 
-      - name: Show downloaded layout
+      - name: Package portable + installer
+        env:
+          OS_LABEL: ${{ matrix.os_label }}
+          ARCH_LABEL: ${{ matrix.arch_label }}
+          APP_NAME: ${{ matrix.app_name }}
+          RK_NAME: ${{ matrix.rk_name }}
         run: |
           set -euo pipefail
-          find dist/in -type f | sort | head -80
+          source packaging/ci/ci-env.sh
+          cd "$(ci_workspace)"
+          ci_setup_toolchain_path "$OS_LABEL"
+          # Ensure zip / dpkg / hdiutil / makensis available on PATH where relevant
+          chmod +x packaging/ci/package-cell.sh
+          packaging/ci/package-cell.sh
 
-      - name: Package portable + installer zips
-        run: |
-          set -euo pipefail
-          chmod +x packaging/ci/package-dist.sh
-          packaging/ci/package-dist.sh
-
-      - name: Upload portable packages
+      - name: Upload portable package
         uses: actions/upload-artifact@v4
         with:
-          name: portable-all
+          name: portable-${{ matrix.os_label }}-${{ matrix.arch_label }}
           path: dist/out/portable/*.zip
           if-no-files-found: error
 
-      - name: Upload installer payloads
+      - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
-          name: installer-all
-          path: dist/out/installer/*.zip
+          name: installer-${{ matrix.os_label }}-${{ matrix.arch_label }}
+          path: |
+            dist/out/installer/*.exe
+            dist/out/installer/*.dmg
+            dist/out/installer/*.deb
           if-no-files-found: error

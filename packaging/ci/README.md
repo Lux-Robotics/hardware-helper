@@ -2,22 +2,34 @@
 
 | File | Role |
 |------|------|
-| `ci-env.sh` | PATH / workspace helpers for bash steps on self-hosted runners |
-| `package-dist.sh` | Assemble portable + installer zips from prebuilt app + rkdeveloptool |
+| `ci-env.sh` | PATH / workspace helpers for self-hosted bash steps |
+| `package-cell.sh` | One OS/arch: portable zip + real installer (NSIS / DMG / deb) |
 
 ## Workflows
 
 ```
 package.yaml
-  ├─ build-rkdeveloptool.yaml  → artifact rkdeveloptool-<os>-<arch>
-  ├─ build-app.yaml            → artifact app-<os>-<arch>
-  └─ package-dist.sh           → portable-all + installer-all zips
+  ├─ build-rkdeveloptool.yaml  → rkdeveloptool-<os>-<arch>
+  ├─ build-app.yaml            → app-<os>-<arch>  (.app on macOS)
+  └─ package matrix (5 cells)  → portable-* + installer-* artifacts
 ```
 
-Portable vs installer: same two binaries + `loader_binaries/`; portable adds
-an empty `portable` marker file. Logs always use OS system directories (see
-`src-tauri/src/logging.rs`), not the app folder.
+### Portable zip contents
 
-**Note:** `linux-aarch64` GUI is omitted from `build-app` / packaging for now
-(Tauri/WebKit cross-link from x86_64 is unreliable). Companion tool still
-builds as `rkdeveloptool-linux-aarch64`.
+- **macOS:** `Rockchip Universal Imager.app` + `rkdeveloptool` + `loader_binaries/`
+- **Windows/Linux:** app binary + `rkdeveloptool` + `loader_binaries/`
+
+No `portable` marker, no README.
+
+### Installers
+
+| OS | Tool | Output |
+|----|------|--------|
+| Windows | NSIS (`makensis`) | `*-setup.exe` |
+| macOS | `hdiutil` | `*.dmg` (Applications symlink) |
+| Linux | `dpkg-deb` | `*.deb` → `/opt/rockchip-universal-imager` |
+
+### App matrix note
+
+`linux-aarch64` GUI is not built on x86_64 hosts (WebKit cross-link). Companion
+`rkdeveloptool-linux-aarch64` is still produced by **Build rkdeveloptool**.

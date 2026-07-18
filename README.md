@@ -11,143 +11,88 @@ a separate C++ binary** that the app spawns (same product model as before).
 ```
 ui/                              # Web frontend (HTML/JS/CSS)
 src-tauri/                       # Tauri/Rust package
-packaging/                       # Portable zip script + future installer assets
-loader_binaries/                 # SPL loader blobs for portable builds
-dependencies/rkdeveloptool/      # Git submodule: Lux-Robotics/rkdeveloptool (C++ CLI source)
+packaging/                       # Bootstrap scripts + NSIS/DMG/deb helpers
+loader_binaries/                 # SPL loader blobs for portable / install trees
+dependencies/rkdeveloptool/      # Git submodule: Lux-Robotics/rkdeveloptool
 ```
 
 Clone with submodules:
 
 ```bash
 git clone --recurse-submodules <this-repo-url>
-# or after a normal clone:
 git submodule update --init --recursive
 ```
 
-Run `cargo tauri` from the **repo root** (it discovers `src-tauri/tauri.conf.json`).
-Or `cd src-tauri && cargo tauri dev` (the Tauri package directory).
-
-Build the companion from the submodule, then stage the binary next to the app (see below).
 ## Port status
 
-| Area | Status (macOS arm64 / Linux x64) |
-|------|----------------------------------|
+| Area | Status |
+|------|--------|
 | Shell (window, dialogs, single-instance, logs) | Done |
 | `rkdeveloptool` spawn + progress | Done (external C++ binary) |
-| USB hotplug (libusb/`rusb`) | Done on Unix |
+| USB hotplug | Done on Unix; Windows partial |
 | Connect / flash / erase / backup / storage | Done (behavioural port) |
 | Linux udev install | Done |
 | Windows USB + libwdi driver install | Not yet |
 
-## Develop on macOS arm64
+## Product packaging
 
-```bash
-# Tools
-xcode-select --install   # if needed
-brew install libusb
-rustup update stable
-cargo install tauri-cli --version "^2" --locked
+### Portable (zip)
 
-cd /Users/antho/Desktop/hardware-helper
+One zip **per OS/arch** containing only:
 
-# Dev window (rebuilds Rust on change)
-cargo tauri dev
-```
+| Platform | Contents |
+|----------|----------|
+| **macOS** | `Rockchip Universal Imager.app` + `rkdeveloptool` + `loader_binaries/` |
+| **Windows / Linux** | `rockchip-universal-imager[.exe]` + `rkdeveloptool[.exe]` + `loader_binaries/` |
 
-### Put `rkdeveloptool` where the app finds it
+No `portable` marker file, no README. Extract and run.
 
-```bash
-# After a release-style build:
-cargo tauri build --no-bundle
+### Installer (real installers)
 
-# Staging folder for a quick test (portable layout)
-STAGE=dist/dev-run
-mkdir -p "$STAGE/loader_binaries"
-cp src-tauri/target/release/rockchip-universal-imager "$STAGE/"
-cp /path/to/rkdeveloptool "$STAGE/rkdeveloptool"
-chmod +x "$STAGE/rkdeveloptool"
-cp -R loader_binaries/* "$STAGE/loader_binaries/" 2>/dev/null || true
-: > "$STAGE/portable"
-cd "$STAGE" && ./rockchip-universal-imager
-```
+One installer **per OS/arch**:
 
-During `cargo tauri dev`, the binary lives under `src-tauri/target/debug/`. Place
-`rkdeveloptool` **next to that binary**:
+| Platform | Format | Installs to |
+|----------|--------|-------------|
+| **Windows** | NSIS `.exe` | `%ProgramFiles%\Rockchip Universal Imager\` |
+| **macOS** | `.dmg` (drag to Applications) | `/Applications` (+ companions beside the `.app` on the DMG) |
+| **Linux** | `.deb` | `/opt/rockchip-universal-imager/` + desktop entry |
 
-```bash
-cp /path/to/rkdeveloptool src-tauri/target/debug/rkdeveloptool
-chmod +x src-tauri/target/debug/rkdeveloptool
-```
+### Logs (always system dirs)
 
-### Linux x64
+Portable and installed builds both write logs to:
 
-System packages (Debian/Ubuntu-style): `libwebkit2gtk-4.1-dev`, `libusb-1.0-0-dev`,
-build-essential, etc. Same `cargo tauri dev` from the repo root.
-
-## Packaging layout
-
-Both **portable** and **installer** products use the same folder shape the app
-already resolves (`paths.rs`): two executables side by side plus loaders.
-
-```
-rockchip-universal-imager…/
-  rockchip-universal-imager[.exe]
-  rkdeveloptool[.exe]
-  loader_binaries/
-  portable          # portable zip only (empty marker file)
-  README.txt        # installer payload only
-```
-
-### Product layouts
-
-**Portable** and **installer payload** use the **same folder shape** (two
-binaries side by side + loaders). Only the zip wrapper differs:
-
-```
-rockchip-universal-imager…/
-  rockchip-universal-imager[.exe]
-  rkdeveloptool[.exe]          # static single-file companion
-  loader_binaries/
-  portable                     # portable zip only (empty marker file)
-  README.txt                   # installer payload only
-```
-
-- **Portable** — run from that folder (no system install). Marker file
-  `portable` selects portable path behaviour for companions.
-- **Installer payload** — same two apps as a folder; a future NSIS/DMG/deb
-  copies that folder into OS program directories. No `portable` marker.
-
-**Logs** always go to OS user/system locations (portable *and* installed):
-
-| OS | Log directory |
-|----|----------------|
+| OS | Path |
+|----|------|
 | Windows | `%LOCALAPPDATA%\RockchipUniversalImager\logs` |
 | macOS | `~/Library/Logs/RockchipUniversalImager` |
 | Linux | `${XDG_STATE_HOME:-~/.local/state}/rockchip-universal-imager/logs` |
 
-### CI workflows (compile once → package)
+## CI workflows
 
 | Workflow | Role |
 |----------|------|
-| `build-rkdeveloptool.yaml` | Compile static companions (6 OS/arch) |
-| `build-app.yaml` | Compile Tauri app only (6 OS/arch) |
-| **`package.yaml`** | Runs **both** builds, then zips portable + installer for all cells |
+| `build-rkdeveloptool.yaml` | Static `rkdeveloptool` companions (6 OS/arch) |
+| `build-app.yaml` | Tauri app (5 cells; **no linux-aarch64 GUI** yet) |
+| **`package.yaml`** | Runs both builds, then packages **portable + installer** per cell |
 
-**Self-hosted** runners; bootstraps under `packaging/*/bootstrap-build-deps.*`.
-
-Typical release: **Actions → Package → Run workflow**.
-
-Iterate faster with **Build rkdeveloptool** or **Build app** alone.
-
-Local assemble (after you have both binaries):
+Self-hosted runners (`[self-hosted, Linux|Windows|macOS, X64]`). Bootstraps:
 
 ```bash
-# Stage like CI:
-mkdir -p dist/dev && cp app rkdeveloptool dist/dev/ && cp -R loader_binaries dist/dev/
-# Portable:
-: > dist/dev/portable
-# Logs still go to the system paths above, not dist/dev/logs
+bash packaging/linux/bootstrap-build-deps.sh
+bash packaging/macos/bootstrap-build-deps.sh
+# Windows (elevated PowerShell):
+.\packaging\windows\bootstrap-build-deps.ps1
 ```
 
-Native installers (NSIS / DMG / deb) can wrap the installer payload later;
-stubs live under `packaging/{windows,macos,linux}/`.
+Windows packaging needs **NSIS** (`makensis`); bootstrap installs it via winget.
+
+## Local develop (macOS example)
+
+```bash
+brew install libusb
+rustup update stable
+cargo install tauri-cli --version "^2" --locked
+cargo tauri dev
+```
+
+Place `rkdeveloptool` next to the debug binary or next to the `.app` for release runs.
