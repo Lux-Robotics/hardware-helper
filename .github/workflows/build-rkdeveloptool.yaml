@@ -79,13 +79,13 @@ jobs:
 
           # --- Windows X64 host: Windows products only (native + aarch64 cross) ---
           - runner: [self-hosted, Windows, X64]
-            shell: cmd /c "packaging\windows\windows-bash.cmd" "{0}"
+            shell: packaging\windows\windows-bash.cmd "{0}"
             os_label: windows
             arch_label: x86_64
             host_triple: x86_64-w64-mingw32
             cross: false
           - runner: [self-hosted, Windows, X64]
-            shell: cmd /c "packaging\windows\windows-bash.cmd" "{0}"
+            shell: packaging\windows\windows-bash.cmd "{0}"
             os_label: windows
             arch_label: aarch64
             host_triple: aarch64-w64-mingw32
