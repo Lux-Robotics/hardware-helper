@@ -222,7 +222,10 @@ jobs:
                 exit 1
                 ;;
             esac
-            # Apple Clang: rkdeveloptool uses -Werror; keep older VLA code from failing hard.
+            # rkdeveloptool Makefile.am uses -Werror; silence known-noisy warnings from
+            # older/MinGW-only code paths (VLA, unused vars like szProgramProcPath on MinGW).
+            export CXXFLAGS="${CXXFLAGS:-} -Wno-unused-variable -Wno-error=unused-variable"
+            export CFLAGS="${CFLAGS:-} -Wno-unused-variable -Wno-error=unused-variable"
             if [[ "$OS_LABEL" == "macos" ]]; then
               export CXXFLAGS="${CXXFLAGS:-} -Wno-vla-cxx-extension -Wno-error=vla-cxx-extension"
               export CFLAGS="${CFLAGS:-} -Wno-vla-cxx-extension -Wno-error=vla-cxx-extension"
