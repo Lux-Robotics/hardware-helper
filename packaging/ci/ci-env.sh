@@ -225,6 +225,12 @@ ci_find_llvm_mingw_root() {
 }
 
 # Set PATH / ACLOCAL for the current OS_LABEL (linux|macos|windows).
+#
+# Optional env:
+#   CI_SKIP_LLVM_MINGW=1  — do not put llvm-mingw on PATH (required for Tauri /
+#                           cargo-install host builds; llvm-mingw's clang wrappers
+#                           break x86_64-w64-mingw32-gcc / -lgcc linking).
+#                           Still used by build-rkdeveloptool for windows-aarch64.
 ci_setup_toolchain_path() {
   local os="${1:-${OS_LABEL:-}}"
   case "$os" in
@@ -243,13 +249,22 @@ ci_setup_toolchain_path() {
         echo "ci-env: WARNING: MSYS2 root not found (set MSYS2_ROOT)" >&2
       fi
 
-      llvm="$(ci_find_llvm_mingw_root || true)"
-      if [[ -n "$llvm" ]]; then
-        export LLVM_MINGW_ROOT_UNIX="$llvm"
-        ci_path_prepend "$llvm/bin"
-        echo "ci-env: LLVM_MINGW_ROOT_UNIX=$llvm"
+      if [[ "${CI_SKIP_LLVM_MINGW:-0}" == "1" ]]; then
+        echo "ci-env: skipping llvm-mingw on PATH (CI_SKIP_LLVM_MINGW=1)"
       else
-        echo "ci-env: WARNING: llvm-mingw not found (set LLVM_MINGW_ROOT) - windows-aarch64 may fail" >&2
+        llvm="$(ci_find_llvm_mingw_root || true)"
+        if [[ -n "$llvm" ]]; then
+          export LLVM_MINGW_ROOT_UNIX="$llvm"
+          # Append (do not prepend): host gcc/msvc must win over llvm clang wrappers.
+          # Prepend was breaking cargo install (host x86_64-gnu) with missing -lgcc.
+          case ":${PATH:-}:" in
+            *":$llvm/bin:"*) ;;
+            *) export PATH="${PATH:+$PATH:}$llvm/bin" ;;
+          esac
+          echo "ci-env: LLVM_MINGW_ROOT_UNIX=$llvm (appended to PATH)"
+        else
+          echo "ci-env: WARNING: llvm-mingw not found (set LLVM_MINGW_ROOT) - windows-aarch64 rkdeveloptool may fail" >&2
+        fi
       fi
 
       if [[ -n "${USERPROFILE:-}" ]]; then
@@ -273,6 +288,31 @@ ci_setup_toolchain_path() {
       ci_path_prepend "${HOME:-}/.cargo/bin"
       ;;
   esac
+}
+
+# Prefer MSVC host toolchain on Windows for Tauri / cargo install (not mingw-gnu).
+ci_prefer_windows_msvc_host() {
+  local u
+  u="$(uname -s 2>/dev/null || true)"
+  case "$u" in
+    MINGW*|MSYS*|CYGWIN*) ;;
+    *)
+      # Also honor explicit OS_LABEL from CI
+      if [[ "${OS_LABEL:-}" != "windows" ]]; then
+        return 0
+      fi
+      ;;
+  esac
+  if ! command -v rustup >/dev/null 2>&1; then
+    return 0
+  fi
+  local host="x86_64-pc-windows-msvc"
+  rustup toolchain install "stable-${host}" --profile minimal
+  rustup default "stable-${host}"
+  rustup target add x86_64-pc-windows-msvc aarch64-pc-windows-msvc 2>/dev/null || true
+  # Clear mingw-oriented CC that may be inherited from the runner env
+  unset CC CXX CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER || true
+  echo "ci-env: host toolchain $(rustup show active-toolchain 2>/dev/null || true)"
 }
 
 # Append a directory to GITHUB_PATH so later Actions steps inherit it.
@@ -357,8 +397,13 @@ ci_ensure_rust() {
 
   if ! command -v rustup >/dev/null 2>&1; then
     echo "ci-env: installing rustup…"
+    local default_tc=stable
+    # Windows self-hosted: install MSVC host (Tauri expects msvc, not gnu).
+    if [[ -n "${WINDIR:-}${windir:-}${USERPROFILE:-}" ]] || [[ "$(uname -s 2>/dev/null || true)" == MINGW* || "$(uname -s 2>/dev/null || true)" == MSYS* ]]; then
+      default_tc=stable-x86_64-pc-windows-msvc
+    fi
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-      | sh -s -- -y --default-toolchain stable --profile minimal
+      | sh -s -- -y --default-toolchain "$default_tc" --profile minimal
     ci_ensure_cargo_path
   fi
 
@@ -369,8 +414,14 @@ ci_ensure_rust() {
     exit 1
   fi
 
-  rustup toolchain install stable --profile minimal
-  rustup default stable
+  # On Windows always prefer MSVC host before installing targets / tools
+  if [[ -n "${WINDIR:-}${windir:-}${USERPROFILE:-}" ]] || [[ "$(uname -s 2>/dev/null || true)" == MINGW* || "$(uname -s 2>/dev/null || true)" == MSYS* ]]; then
+    ci_prefer_windows_msvc_host
+  else
+    rustup toolchain install stable --profile minimal
+    rustup default stable
+  fi
+
   if [[ -n "$target" ]]; then
     rustup target add "$target"
   fi

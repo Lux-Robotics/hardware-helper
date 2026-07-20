@@ -5,6 +5,11 @@
 #   others: rockchip-universal-imager[.exe]   (+ APP.txt)
 #
 # linux-aarch64 GUI omitted (needs native arm64 Linux runner).
+#
+# Windows notes:
+#   - Targets are *-pc-windows-msvc (not gnu). Host must be MSVC for cargo install.
+#   - Do not put llvm-mingw first on PATH (breaks host link with missing -lgcc).
+#     llvm-mingw is only for build-rkdeveloptool windows-aarch64.
 
 name: Build app
 
@@ -22,11 +27,15 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # App builds never need llvm-mingw on PATH (rkdeveloptool job does).
+  CI_SKIP_LLVM_MINGW: "1"
 
 jobs:
   app:
     name: app (${{ matrix.os_label }}-${{ matrix.arch_label }})
     runs-on: ${{ matrix.runner }}
+    # Cross-compiling full Tauri release can exceed default; fail clearly instead of hanging.
+    timeout-minutes: 90
     defaults:
       run:
         shell: ${{ matrix.shell }}
@@ -80,14 +89,24 @@ jobs:
           cd "$(ci_workspace)"
           ci_setup_toolchain_path "$OS_LABEL"
           ci_ensure_rust "${{ matrix.rust_target }}"
+          if [[ "$OS_LABEL" == "windows" ]]; then
+            ci_prefer_windows_msvc_host
+            rustc -vV
+            if ! rustc -vV | grep -q "host: x86_64-pc-windows-msvc"; then
+              echo "WARNING: host is not x86_64-pc-windows-msvc — cargo install may use gnu + break" >&2
+              rustup show || true
+            fi
+          fi
 
-      - name: Cache cargo
+      # Self-hosted runners already keep cargo/target on disk. Caching only the
+      # registry/git indexes avoids multi-GB target uploads that hang post-job.
+      - name: Cache cargo registry
         uses: Swatinem/rust-cache@v2
         continue-on-error: true
         with:
           workspaces: src-tauri -> target
           shared-key: app-${{ matrix.os_label }}-${{ matrix.arch_label }}
-          # Self-hosted: keep caches on the runner; still hash lockfile for keys
+          cache-targets: false
           cache-on-failure: true
 
       - name: Install tauri-cli
@@ -99,10 +118,25 @@ jobs:
           cd "$(ci_workspace)"
           ci_setup_toolchain_path "$OS_LABEL"
           ci_ensure_cargo_path
-          if ! command -v cargo-tauri >/dev/null 2>&1 && ! cargo tauri --version >/dev/null 2>&1; then
-            cargo install tauri-cli --version "^2" --locked
+          if [[ "$OS_LABEL" == "windows" ]]; then
+            ci_prefer_windows_msvc_host
+            # Ensure no stale mingw/llvm CC leaks into host build scripts
+            unset CC CXX AR CFLAGS CXXFLAGS LDFLAGS || true
+            unset CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER || true
+          fi
+
+          if command -v cargo-tauri >/dev/null 2>&1; then
+            echo "tauri-cli present: $(cargo-tauri --version 2>/dev/null || true)"
+          elif cargo tauri --version >/dev/null 2>&1; then
+            echo "tauri-cli present via cargo: $(cargo tauri --version)"
           else
-            echo "tauri-cli already available: $(cargo tauri --version 2>/dev/null || true)"
+            echo "Installing tauri-cli ^2 (host=$(rustc -vV | sed -n 's/^host: //p'))…"
+            # Explicit host target on Windows avoids accidental gnu builds
+            if [[ "$OS_LABEL" == "windows" ]]; then
+              cargo install tauri-cli --version "^2" --locked --target x86_64-pc-windows-msvc
+            else
+              cargo install tauri-cli --version "^2" --locked
+            fi
           fi
           cargo tauri --version
 
@@ -119,19 +153,31 @@ jobs:
           cd "$WS"
           ci_setup_toolchain_path "$OS_LABEL"
           ci_ensure_cargo_path
+          if [[ "$OS_LABEL" == "windows" ]]; then
+            ci_prefer_windows_msvc_host
+            unset CC CXX || true
+          fi
 
           command -v rustc
           command -v cargo
           rustc -vV
+          cargo tauri --version
 
           case "$OS_LABEL-$ARCH_LABEL" in
             macos-x86_64)
               export CARGO_TARGET_X86_64_APPLE_DARWIN_LINKER="${CARGO_TARGET_X86_64_APPLE_DARWIN_LINKER:-clang}"
               export CFLAGS_x86_64_apple_darwin="${CFLAGS_x86_64_apple_darwin:--arch x86_64}"
+              export SDKROOT="${SDKROOT:-$(xcrun --sdk macosx --show-sdk-path 2>/dev/null || true)}"
               ;;
             macos-aarch64)
               export CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER="${CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER:-clang}"
               export CFLAGS_aarch64_apple_darwin="${CFLAGS_aarch64_apple_darwin:--arch arm64}"
+              export SDKROOT="${SDKROOT:-$(xcrun --sdk macosx --show-sdk-path 2>/dev/null || true)}"
+              ;;
+            windows-aarch64)
+              # Cross MSVC arm64 from x64 host — needs VS Build Tools ARM64 package.
+              echo "Building aarch64-pc-windows-msvc (host MSVC x64)"
+              rustup target list --installed | grep -q aarch64-pc-windows-msvc
               ;;
           esac
 
