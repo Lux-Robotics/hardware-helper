@@ -1,13 +1,12 @@
-# Build rkdeveloptool for six targets (own-OS + arm64 on each runner).
+# Build rkdeveloptool for six targets (own-OS + arm64 where needed).
 #
 # Runners: selected by GitHub’s automatic self-hosted labels only
 # (no custom hostnames — any machine with matching OS+arch works):
 #
-#   [self-hosted, Linux,  X64] → linux-x86_64,  linux-aarch64
-#   [self-hosted, Windows, X64] → windows-x86_64, windows-aarch64
-#   [self-hosted, macOS,  X64] → macos-x86_64,  macos-aarch64
-#
-# (If you add an ARM64 host later, add matrix rows with [self-hosted, <OS>, ARM64].)
+#   [self-hosted, Linux,  X64]   → linux-x86_64
+#   [self-hosted, Linux,  ARM64] → linux-aarch64  (native)
+#   [self-hosted, Windows, X64]  → windows-x86_64, windows-aarch64
+#   [self-hosted, macOS,  X64]   → macos-x86_64,  macos-aarch64
 #
 # Upstream build (from rkdeveloptool Readme):
 #   ./autogen.sh && ./configure && make
@@ -15,7 +14,7 @@
 #
 # Pre-installed expectations (see packaging/*/bootstrap-build-deps.*):
 #   Linux:   build-essential, pkg-config, autoconf, automake, libtool,
-#            libudev-dev (native linux-x86_64 libusb build); aarch64 cross gcc/g++
+#            libudev-dev; native gcc on each arch host
 #   macOS:   Xcode CLT, pkg-config, automake, autoconf, libtool
 #   Windows: MSYS2 (MINGW64 gcc, autotools) + llvm-mingw for aarch64-w64-mingw32
 #            Shell: C:/msys64/usr/bin/bash.exe (matrix cannot use env context)
@@ -59,19 +58,19 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # --- Linux X64 host: Linux products only ---
+          # --- Linux: native builds on matching arch hosts ---
           - runner: [self-hosted, Linux, X64]
             shell: bash
             os_label: linux
             arch_label: x86_64
             host_triple: x86_64-linux-gnu
             cross: false
-          - runner: [self-hosted, Linux, X64]
+          - runner: [self-hosted, Linux, ARM64]
             shell: bash
             os_label: linux
             arch_label: aarch64
             host_triple: aarch64-linux-gnu
-            cross: true
+            cross: false
 
           # --- Windows X64 host: Windows products only (native + aarch64 cross) ---
           - runner: [self-hosted, Windows, X64]
@@ -167,9 +166,15 @@ jobs:
                 export CXX="${CXX:-g++}"
                 ;;
               linux-aarch64)
-                export CC="${CC:-aarch64-linux-gnu-gcc}"
-                export CXX="${CXX:-aarch64-linux-gnu-g++}"
-                CONFIGURE_HOST="--host=aarch64-linux-gnu"
+                # Prefer native gcc on ARM64 runners; fall back to cross triple on x86 hosts.
+                if [[ "$(uname -m)" == "aarch64" || "$(uname -m)" == "arm64" ]]; then
+                  export CC="${CC:-gcc}"
+                  export CXX="${CXX:-g++}"
+                else
+                  export CC="${CC:-aarch64-linux-gnu-gcc}"
+                  export CXX="${CXX:-aarch64-linux-gnu-g++}"
+                  CONFIGURE_HOST="--host=aarch64-linux-gnu"
+                fi
                 ;;
               windows-x86_64)
                 export CC="${CC:-x86_64-w64-mingw32-gcc}"

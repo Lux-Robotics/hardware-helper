@@ -11,7 +11,7 @@
 package.yaml
   ├─ build-rkdeveloptool.yaml  → rkdeveloptool-<os>-<arch>
   ├─ build-app.yaml            → app-<os>-<arch>  (.app on macOS)
-  └─ package matrix (5 cells)  → portable-* + installer-* artifacts
+  └─ package matrix (6 cells)  → portable-* + installer-* artifacts
 ```
 
 ### Portable zip contents
@@ -29,7 +29,11 @@ No `portable` marker.
 | macOS | `hdiutil` | `*.dmg` (`.app` + companions + Applications symlink) |
 | Linux | `dpkg-deb` | `*.deb` → `/opt/rockchip-universal-imager` |
 
-### App matrix note
+### Linux runners
 
-`linux-aarch64` GUI is not built on x86_64 hosts (WebKit cross-link). Companion
-`rkdeveloptool-linux-aarch64` is still produced by **Build rkdeveloptool**.
+| Product | Runner labels |
+|---------|----------------|
+| `linux-x86_64` | `[self-hosted, Linux, X64]` |
+| `linux-aarch64` | `[self-hosted, Linux, ARM64]` (native app + companion) |
+
+Bootstrap both with `packaging/linux/bootstrap-build-deps.sh`.

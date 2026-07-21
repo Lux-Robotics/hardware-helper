@@ -3,7 +3,7 @@
 #   package.yaml
 #     ├─ build-rkdeveloptool → rkdeveloptool-<os>-<arch>
 #     ├─ build-app           → app-<os>-<arch>  (.app on macOS)
-#     └─ package matrix (5 cells) → per-cell portable zip + real installer
+#     └─ package matrix (6 cells) → per-cell portable zip + real installer
 #
 # Portable (one zip per OS/arch): app + rkdeveloptool + loader_binaries only
 #   (no portable marker, no README)
@@ -52,6 +52,12 @@ jobs:
             shell: bash
             os_label: linux
             arch_label: x86_64
+            app_name: rockchip-universal-imager
+            rk_name: rkdeveloptool
+          - runner: [self-hosted, Linux, ARM64]
+            shell: bash
+            os_label: linux
+            arch_label: aarch64
             app_name: rockchip-universal-imager
             rk_name: rkdeveloptool
           - runner: [self-hosted, Windows, X64]

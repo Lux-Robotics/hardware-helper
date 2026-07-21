@@ -4,7 +4,7 @@
 #   macOS:  "Rockchip Universal Imager.app"/  (+ APP.txt)
 #   others: rockchip-universal-imager[.exe]   (+ APP.txt)
 #
-# linux-aarch64 GUI omitted (needs native arm64 Linux runner).
+# linux-aarch64 runs on [self-hosted, Linux, ARM64] (native WebKit/GTK).
 #
 # Windows notes:
 #   - Targets are *-pc-windows-msvc (not gnu). Host must be MSVC for cargo install.
@@ -49,6 +49,12 @@ jobs:
             arch_label: x86_64
             rust_target: x86_64-unknown-linux-gnu
             app_name: rockchip-universal-imager
+          - runner: [self-hosted, Linux, ARM64]
+            shell: bash
+            os_label: linux
+            arch_label: aarch64
+            rust_target: aarch64-unknown-linux-gnu
+            app_name: rockchip-universal-imager
           - runner: [self-hosted, Windows, X64]
             shell: C:/msys64/usr/bin/bash.exe --noprofile --norc -e {0}
             os_label: windows
@@ -78,8 +84,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      # PATH changes only persist across steps via GITHUB_PATH. Without this,
-      # Swatinem/rust-cache fails with: Command failed: rustc -vV
+      # PATH changes only persist across steps via GITHUB_PATH (written by ci_ensure_rust).
+      # Do NOT use Swatinem/rust-cache on these self-hosted runners: its post-job
+      # "Cache Configuration" step regularly hangs for 30+ minutes (especially
+      # macos-x86_64). Disk caches under ~/.cargo and target/ already persist.
       - name: Ensure Rust stable + target
         env:
           OS_LABEL: ${{ matrix.os_label }}
@@ -97,17 +105,6 @@ jobs:
               rustup show || true
             fi
           fi
-
-      # Self-hosted runners already keep cargo/target on disk. Caching only the
-      # registry/git indexes avoids multi-GB target uploads that hang post-job.
-      - name: Cache cargo registry
-        uses: Swatinem/rust-cache@v2
-        continue-on-error: true
-        with:
-          workspaces: src-tauri -> target
-          shared-key: app-${{ matrix.os_label }}-${{ matrix.arch_label }}
-          cache-targets: false
-          cache-on-failure: true
 
       - name: Install tauri-cli
         env:

@@ -83,7 +83,7 @@ Portable and installed builds both write logs to:
 | Workflow | Role |
 |----------|------|
 | `build-rkdeveloptool.yaml` | Static `rkdeveloptool` companions (6 OS/arch) |
-| `build-app.yaml` | Tauri app (5 cells; **no linux-aarch64 GUI** yet) |
+| `build-app.yaml` | Tauri app (6 cells; `linux-aarch64` on `[self-hosted, Linux, ARM64]`) |
 | **`package.yaml`** | Runs both builds, then packages **portable + installer** per cell |
 
 Self-hosted runners (`[self-hosted, Linux|Windows|macOS, X64]`). Bootstraps:
